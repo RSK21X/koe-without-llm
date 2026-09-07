@@ -188,7 +188,7 @@ static OSStatus SPCarbonHotKeyPressed(EventHandlerCallRef nextHandler,
 
 // Run a block on the main thread in kCFRunLoopCommonModes. Unlike
 // dispatch_async(main queue), this also executes while the main run loop is
-// in a modal or event-tracking mode (NSAlert, Sparkle update prompts, menu
+// in a modal or event-tracking mode (NSAlert, menu
 // tracking) — the main dispatch queue is NOT drained during those loops, and
 // trigger handling must not freeze whenever an alert happens to be on screen.
 static void SPPerformOnMainRunLoop(dispatch_block_t block) {
@@ -1093,7 +1093,7 @@ static CGEventRef hotkeyEventCallback(CGEventTapProxy proxy,
 
     // The debounce timer fires on a global queue and hops back to the main
     // thread in common modes. dispatch_after onto the main queue would not
-    // fire while a modal loop runs (Sparkle update prompt, NSAlert) — the
+    // fire while a modal loop runs (NSAlert) — the
     // release would freeze there while trigger-down events keep arriving,
     // wedging the state machine.
     __block dispatch_block_t scheduled = nil;

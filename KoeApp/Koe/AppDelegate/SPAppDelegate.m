@@ -13,7 +13,6 @@
 #import "SPOverlayPanel.h"
 #import "SPHistoryManager.h"
 #import "SPSetupWizardWindowController.h"
-#import <Sparkle/Sparkle.h>
 #import "SPLocalization.h"
 #import "koe_core.h"
 #import <os/log.h>
@@ -104,7 +103,6 @@ static BOOL configFlagEnabled(const char *keyPath) {
 // subsystems so the arming source can be bisected with real-usage rounds.
 // KOE_LAB_NO_HOTKEY=1  -> no SPHotkeyMonitor at all (no tap/monitors/Carbon)
 // KOE_LAB_NO_AUDIO=1   -> no prepared AudioQueue (mic device not held)
-// KOE_LAB_NO_SPARKLE=1 -> no Sparkle updater
 static BOOL SPLabFlag(const char *name) {
     const char *value = getenv(name);
     return value && value[0] == '1';
@@ -243,15 +241,6 @@ static BOOL SPLabFlag(const char *name) {
     self.overlayPanel = [[SPOverlayPanel alloc] init];
     self.overlayPanel.delegate = self;
 
-    // Initialize Sparkle updater (feed URL and public key come from Info.plist)
-    if (SPLabFlag("KOE_LAB_NO_SPARKLE")) {
-        NSLog(@"[Koe] LAB: Sparkle updater disabled");
-    } else {
-        self.updaterController = [[SPUStandardUpdaterController alloc] initWithStartingUpdater:YES
-                                                                               updaterDelegate:nil
-                                                                            userDriverDelegate:nil];
-    }
-
     // Request notification permission
     [self.permissionManager requestNotificationPermission];
 
@@ -321,7 +310,7 @@ static BOOL SPLabFlag(const char *name) {
     [self cancelPendingSessionEnd];
     // Cancel any scheduled CGEventPost paste/undo blocks. The status-bar quit
     // path already does this, but termination can also start elsewhere
-    // (Sparkle update relaunch, logout/shutdown) — without the cancel, a
+    // (logout/shutdown) — without the cancel, a
     // pending synthetic paste can still fire during run-loop draining and
     // leak key events into whichever app is focused.
     [self.pasteManager cancel];
@@ -1117,10 +1106,6 @@ static BOOL SPLabFlag(const char *name) {
         self.setupWizard.rustBridge = self.rustBridge;
     }
     [self.setupWizard showWindow:nil];
-}
-
-- (void)statusBarDidSelectCheckForUpdates {
-    [self.updaterController checkForUpdates:nil];
 }
 
 #pragma mark - SPSetupWizardDelegate

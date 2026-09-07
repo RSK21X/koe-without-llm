@@ -40,7 +40,6 @@
 
 "statusBar.menu.setupWizard" = "Setup Wizard...";
 "statusBar.menu.openConfig" = "Open Config Folder...";
-"statusBar.menu.checkUpdates" = "Check for Updates...";
 "statusBar.menu.launchAtLogin" = "Launch at Login";
 "statusBar.menu.quit" = "Quit Koe";
 

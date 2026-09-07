@@ -3755,7 +3755,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
       [self fittingHeightForWrappingLabel:contributorsLabel
                                     width:paneWidth - 120];
   CGFloat contentHeight =
-      308 + MAX(0.0, descH - 40.0) + 132.0 + contributorsH + 34.0;
+      348 + MAX(0.0, descH - 40.0) + 132.0 + contributorsH + 34.0;
   NSView *pane =
       [[NSView alloc] initWithFrame:NSMakeRect(0, 0, paneWidth, contentHeight)];
 
@@ -3798,8 +3798,8 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   [pane addSubview:desc];
   y = NSMinY(desc.frame) - 46;
 
-  // GitHub button
-  NSButton *githubButton = [NSButton buttonWithTitle:@"GitHub 项目主页"
+  // Original project button
+  NSButton *githubButton = [NSButton buttonWithTitle:@"原作者项目主页"
                                               target:self
                                               action:@selector(openGitHub:)];
   githubButton.bezelStyle = NSBezelStyleRounded;
@@ -3808,6 +3808,18 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   githubButton.imagePosition = NSImageTrailing;
   githubButton.frame = NSMakeRect((paneWidth - 180) / 2.0, y, 180, 32);
   [pane addSubview:githubButton];
+  y -= 40;
+
+  // Fork owner's GitHub profile
+  NSButton *myGithubButton = [NSButton buttonWithTitle:@"我的 GitHub 主页"
+                                               target:self
+                                               action:@selector(openMyGitHub:)];
+  myGithubButton.bezelStyle = NSBezelStyleRounded;
+  myGithubButton.image = [NSImage imageWithSystemSymbolName:@"arrow.up.right"
+                                   accessibilityDescription:nil];
+  myGithubButton.imagePosition = NSImageTrailing;
+  myGithubButton.frame = NSMakeRect((paneWidth - 180) / 2.0, y, 180, 32);
+  [pane addSubview:myGithubButton];
   y -= 40;
 
   // Documentation link
@@ -3850,10 +3862,15 @@ static NSString *SPCondensedProviderError(NSString *raw) {
       openURL:[NSURL URLWithString:@"https://github.com/missuo/koe"]];
 }
 
+- (void)openMyGitHub:(id)sender {
+  [[NSWorkspace sharedWorkspace]
+      openURL:[NSURL URLWithString:@"https://github.com/RSK21X"]];
+}
+
 - (void)openDocs:(id)sender {
   [[NSWorkspace sharedWorkspace]
       openURL:[NSURL URLWithString:
-                         @"https://github.com/missuo/koe/blob/main/README.md"]];
+                         @"https://github.com/RSK21X/koe-without-llm/blob/main/README.md"]];
 }
 
 // ─── Shared button bar ──────────────────────────────────────────────

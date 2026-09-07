@@ -360,12 +360,6 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
     openConfig.target = self;
     [menu addItem:openConfig];
 
-    NSMenuItem *checkForUpdates = [[NSMenuItem alloc] initWithTitle:KoeLocalizedString(@"statusBar.menu.checkUpdates")
-                                                             action:@selector(checkForUpdates:)
-                                                      keyEquivalent:@""];
-    checkForUpdates.target = self;
-    [menu addItem:checkForUpdates];
-
     [menu addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem *loginItem = [[NSMenuItem alloc] initWithTitle:KoeLocalizedString(@"statusBar.menu.launchAtLogin")
@@ -846,12 +840,6 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
 - (void)reloadConfig:(id)sender {
     if ([self.delegate respondsToSelector:@selector(statusBarDidSelectReloadConfig)]) {
         [self.delegate statusBarDidSelectReloadConfig];
-    }
-}
-
-- (void)checkForUpdates:(id)sender {
-    if ([self.delegate respondsToSelector:@selector(statusBarDidSelectCheckForUpdates)]) {
-        [self.delegate statusBarDidSelectCheckForUpdates];
     }
 }
 

@@ -113,7 +113,7 @@ Instead of a CLI tool, the app provides a menu bar dropdown with:
 - **Statistics section**: total characters, words, recording time, session count, and input speed
 - **Permissions section**: shows granted/missing status for Microphone, Accessibility, Input Monitoring, and Notifications
 - **Microphone section**: a submenu listing all available audio input devices; "System Default" is always present as the first option; the currently selected device is indicated with a checkmark; selection persists across app restarts via `NSUserDefaults`
-- **Utility actions**: `Setup Wizard...`, `Open Config Folder...`, `Check for Updates...`, `Launch at Login`, and `Quit Koe`
+- **Utility actions**: `Setup Wizard...`, `Open Config Folder...`, `Launch at Login`, and `Quit Koe`
 
 Section headers use custom `NSView` with bold labels (not selectable, not grayed out). The idle icon is a 5-bar audio waveform for easy recognition.
 The current Setup Wizard exposes panes for ASR, LLM, Controls, Dictionary, and System Prompt. The LLM pane supports provider selection (OpenAI Compatible or MLX) — selecting MLX shows a local model picker with download/status controls. Advanced knobs such as `user_prompt.txt`, cloud-provider custom `headers`, and `llm.no_reasoning_control` remain config-file-driven.

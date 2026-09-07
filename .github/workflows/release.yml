@@ -28,9 +28,6 @@ on:
 permissions:
   contents: write
 
-env:
-  SPARKLE_VERSION: 2.9.4
-
 jobs:
   test:
     name: Test Rust core
@@ -41,15 +38,14 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Check the changelog has a section for this release
-        # Fail here, in seconds, rather than after the ~30-minute build matrix:
-        # the Sparkle appcast description is generated from this section, and a
-        # release published without it shows users a bare "see release notes".
+        # Fail here, in seconds, rather than after the build:
+        # every tagged release should have a corresponding changelog section.
         if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           if ! grep -qE "^## ${VERSION}( |$)" CHANGELOG.md; then
-            echo "::error file=CHANGELOG.md::CHANGELOG.md has no '## ${VERSION}' section. Sparkle's update dialog needs it — add it before tagging."
+            echo "::error file=CHANGELOG.md::CHANGELOG.md has no '## ${VERSION}' section — add it before tagging."
             exit 1
           fi
           PLIST_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" KoeApp/Koe/Info.plist)
@@ -70,11 +66,8 @@ jobs:
         run: cargo test --manifest-path koe-core/Cargo.toml
 
   build-arm64:
-    # The two app variants build in parallel so the (much slower) MLX build
-    # never delays the standard app. On tag pushes each variant uploads its
-    # zip to the GitHub Release as soon as it finishes; the appcast update
-    # still waits for both.
-    name: Build macOS arm64 (${{ matrix.variant }})
+    # On tag pushes the build zip is uploaded to the GitHub Release.
+    name: Build macOS arm64
     needs: test
     runs-on: macos-26
     strategy:
@@ -85,10 +78,6 @@ jobs:
             scheme: Koe
             zip: Koe-macOS-arm64.zip
             artifact: Koe-macOS-arm64
-          - variant: mlx
-            scheme: Koe-MLX
-            zip: Koe-MLX-macOS-arm64.zip
-            artifact: Koe-MLX-macOS-arm64
 
     steps:
       - name: Checkout
@@ -102,8 +91,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          # Per-variant: the two schemes build koe-core with different
-          # feature sets, so sharing one cache would thrash it.
+          # Keep the cache key tied to the single build variant.
           key: aarch64-apple-darwin-${{ matrix.variant }}
 
       - name: Install dependencies
@@ -150,28 +138,6 @@ jobs:
 
           echo "CODESIGN_IDENTITY=Developer ID Application" >> "$GITHUB_ENV"
 
-      - name: Set up Sparkle signing
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          SPARKLE_ED25519_PUBLIC_KEY: ${{ secrets.SPARKLE_ED25519_PUBLIC_KEY }}
-          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          curl -fL "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz" \
-            -o "$RUNNER_TEMP/sparkle.tar.xz"
-          mkdir -p "$RUNNER_TEMP/sparkle"
-          tar -xJf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle"
-          xattr -dr com.apple.quarantine "$RUNNER_TEMP/sparkle" || true
-
-          KEY_FILE="$RUNNER_TEMP/sparkle_ed25519.key"
-          printf '%s' "$SPARKLE_ED25519_PRIVATE_KEY" > "$KEY_FILE"
-          chmod 600 "$KEY_FILE"
-
-          /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $SPARKLE_ED25519_PUBLIC_KEY" KoeApp/Koe/Info.plist
-
-          echo "SPARKLE_BIN=$RUNNER_TEMP/sparkle/bin" >> "$GITHUB_ENV"
-          echo "SPARKLE_PRIVATE_KEY_FILE=$KEY_FILE" >> "$GITHUB_ENV"
-
       - name: Build CLI
         run: cargo build --package koe-cli --release --target aarch64-apple-darwin
 
@@ -210,16 +176,10 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
-          path: |
-            ${{ matrix.zip }}
-            ${{ matrix.zip }}.sparkle.json
+          path: ${{ matrix.zip }}
           if-no-files-found: error
 
       - name: Upload to GitHub Release
-        # Each variant is published the moment it is ready — the standard app
-        # must not wait for the slower MLX build. Creating the release can
-        # race with the other variant's job; `|| true` + upload handles the
-        # loser of that race.
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -237,45 +197,3 @@ jobs:
         if: always()
         run: |
           security delete-keychain "$RUNNER_TEMP/build.keychain-db" 2>/dev/null || true
-          rm -f "$RUNNER_TEMP/sparkle_ed25519.key"
-
-  release:
-    # The zips are uploaded by each build job as soon as they are ready; this
-    # job only updates the Sparkle feeds, which need BOTH variants' signing
-    # metadata, so it waits for the whole matrix.
-    name: Update Sparkle feeds
-    needs: build-arm64
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-
-    steps:
-      - name: Checkout main
-        uses: actions/checkout@v7
-        with:
-          ref: main
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Update Sparkle appcasts on main
-        if: ${{ !contains(github.ref_name, '-') }}
-        run: |
-          set -euo pipefail
-          python3 .github/scripts/update-feeds.py \
-            --tag "${GITHUB_REF_NAME}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --dist dist
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/appcast.xml docs/appcast-mlx.xml docs/update-feed.json
-          if git diff --cached --quiet; then
-            echo "No feed changes to commit"
-            exit 0
-          fi
-          git commit -m "chore(release): update appcasts for ${GITHUB_REF_NAME}"
-          git pull --rebase origin main
-          git push origin HEAD:main
