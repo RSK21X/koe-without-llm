@@ -1,6 +1,5 @@
 use crate::errors::{KoeError, Result};
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 /// Root configuration structure matching ~/.koe/config.yaml
@@ -8,8 +7,6 @@ use std::path::{Path, PathBuf};
 pub struct Config {
     #[serde(default)]
     pub asr: AsrSection,
-    #[serde(default)]
-    pub llm: LlmSection,
     #[serde(default)]
     pub feedback: FeedbackSection,
     #[serde(default)]
@@ -20,33 +17,16 @@ pub struct Config {
     pub hotkey: HotkeySection,
     #[serde(default)]
     pub overlay: OverlaySection,
-    #[serde(default = "default_prompt_templates")]
-    pub prompt_templates: Vec<PromptTemplate>,
-}
-
-/// A named prompt template selectable from the overlay UI.
-#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
-pub struct PromptTemplate {
-    /// Display name shown on the overlay button
-    pub name: String,
-    /// Whether this template should be shown in the overlay selector
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    /// Shortcut key number (1-9)
-    pub shortcut: u8,
-    /// Inline system prompt text (mutually exclusive with system_prompt_path)
+    /// Output shaping applied after the online ASR provider returns text.
     #[serde(default)]
-    pub system_prompt: Option<String>,
-    /// Path to system prompt file, relative to ~/.koe/ (alternative to inline)
-    #[serde(default)]
-    pub system_prompt_path: Option<String>,
+    pub output: OutputSection,
 }
 
 // ─── ASR V2 Configuration ───────────────────────────────────────────
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AsrSection {
-    /// Which ASR provider to use: "doubaoime" (default), "doubao", "qwen", "glm", "mimo", "mlx", "sherpa-onnx", "apple-speech"
+    /// Which online ASR provider to use: "doubaoime" (default), "doubao", "qwen", "glm", or "mimo".
     #[serde(default = "default_asr_provider")]
     pub provider: String,
 
@@ -62,18 +42,6 @@ pub struct AsrSection {
     #[serde(default)]
     pub qwen: QwenAsrConfig,
 
-    /// MLX local ASR configuration (Apple Silicon only)
-    #[serde(default)]
-    pub mlx: MlxAsrConfig,
-
-    /// Sherpa-ONNX local ASR configuration (CPU)
-    #[serde(rename = "sherpa-onnx", default)]
-    pub sherpa_onnx: SherpaOnnxAsrConfig,
-
-    /// Apple Speech local ASR configuration (macOS 26+)
-    #[serde(rename = "apple-speech", default)]
-    pub apple_speech: AppleSpeechAsrConfig,
-
     /// GLM (Zhipu) ASR configuration
     #[serde(default)]
     pub glm: GlmAsrConfig,
@@ -81,29 +49,6 @@ pub struct AsrSection {
     /// MiMo (Xiaomi) ASR configuration
     #[serde(default)]
     pub mimo: MimoAsrConfig,
-
-    /// WeType (微信输入法) offline local ASR configuration (embed_140m)
-    #[serde(default)]
-    pub wetype: WeTypeAsrConfig,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct WeTypeAsrConfig {
-    /// Model directory name under ~/.koe/models/ (holds embed140m.koepack + dict.decoder.utf8.txt)
-    #[serde(default = "default_wetype_model")]
-    pub model: String,
-}
-
-impl Default for WeTypeAsrConfig {
-    fn default() -> Self {
-        Self {
-            model: default_wetype_model(),
-        }
-    }
-}
-
-fn default_wetype_model() -> String {
-    "wetype/embed140m".into()
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -212,75 +157,6 @@ pub struct DoubaoAsrConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct MlxAsrConfig {
-    /// Model directory name under ~/.koe/models/mlx/
-    #[serde(default = "default_mlx_model")]
-    pub model: String,
-    /// Delay preset: "realtime", "agent", "subtitle"
-    #[serde(default = "default_mlx_delay_preset")]
-    pub delay_preset: String,
-    /// Language: "auto", "zh", "en"
-    #[serde(default = "default_mlx_language")]
-    pub language: String,
-}
-
-impl Default for MlxAsrConfig {
-    fn default() -> Self {
-        Self {
-            model: default_mlx_model(),
-            delay_preset: default_mlx_delay_preset(),
-            language: default_mlx_language(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct SherpaOnnxAsrConfig {
-    /// Model directory name under ~/.koe/models/sherpa-onnx/
-    #[serde(default = "default_sherpa_onnx_model")]
-    pub model: String,
-    /// Number of threads for inference (default: 2)
-    #[serde(default = "default_sherpa_onnx_num_threads")]
-    pub num_threads: i32,
-    /// Hotwords score boost (default: 1.5)
-    #[serde(default = "default_sherpa_onnx_hotwords_score")]
-    pub hotwords_score: f32,
-    /// Trailing silence for endpoint detection in seconds (default: 1.2)
-    #[serde(default = "default_sherpa_onnx_endpoint_silence")]
-    pub endpoint_silence: f32,
-}
-
-impl Default for SherpaOnnxAsrConfig {
-    fn default() -> Self {
-        Self {
-            model: default_sherpa_onnx_model(),
-            num_threads: default_sherpa_onnx_num_threads(),
-            hotwords_score: default_sherpa_onnx_hotwords_score(),
-            endpoint_silence: default_sherpa_onnx_endpoint_silence(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct AppleSpeechAsrConfig {
-    /// Locale identifier (e.g. "zh_CN", "en_US")
-    #[serde(default = "default_apple_speech_locale")]
-    pub locale: String,
-}
-
-impl Default for AppleSpeechAsrConfig {
-    fn default() -> Self {
-        Self {
-            locale: default_apple_speech_locale(),
-        }
-    }
-}
-
-fn default_apple_speech_locale() -> String {
-    "zh_CN".to_string()
-}
-
-#[derive(Debug, Deserialize, Clone)]
 pub struct GlmAsrConfig {
     #[serde(default = "default_glm_url")]
     pub url: String,
@@ -340,223 +216,6 @@ impl Default for MimoAsrConfig {
     }
 }
 
-// ─── Other Sections (unchanged) ─────────────────────────────────────
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LlmSection {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default = "default_false")]
-    pub prompt_templates_enabled: bool,
-    #[serde(default = "default_true")]
-    pub auto_paste_processed_text: bool,
-    /// Active LLM profile id.
-    #[serde(default = "default_llm_active_profile")]
-    pub active_profile: String,
-    /// Saved LLM profiles keyed by stable profile id.
-    #[serde(default = "default_llm_profiles")]
-    pub profiles: BTreeMap<String, LlmProfileConfig>,
-    #[serde(default)]
-    pub temperature: f64,
-    #[serde(default = "default_top_p")]
-    pub top_p: f64,
-    #[serde(default = "default_llm_timeout")]
-    pub timeout_ms: u64,
-    #[serde(default = "default_max_output_tokens")]
-    pub max_output_tokens: u32,
-    #[serde(default = "default_dictionary_max_candidates")]
-    pub dictionary_max_candidates: usize,
-    #[serde(default = "default_system_prompt_path")]
-    pub system_prompt_path: String,
-    #[serde(default = "default_user_prompt_path")]
-    pub user_prompt_path: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct LlmProfilesPayload {
-    pub active_profile: String,
-    pub profiles: BTreeMap<String, LlmProfileConfig>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum LlmApiProtocol {
-    #[default]
-    OpenaiChat,
-    OpenaiResponses,
-    AnthropicMessages,
-}
-
-impl LlmApiProtocol {
-    pub fn default_endpoint_path(self) -> &'static str {
-        match self {
-            Self::OpenaiChat => "/chat/completions",
-            Self::OpenaiResponses => "/responses",
-            Self::AnthropicMessages => "/messages",
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct LlmProfileConfig {
-    #[serde(default)]
-    pub name: String,
-    /// LLM provider: "openai", "anthropic", "apfel", or "mlx". "apfel" is
-    /// tracked separately so the UI can show Apple Foundation Models defaults.
-    #[serde(default = "default_llm_provider")]
-    pub provider: String,
-    /// Wire protocol used by this remote profile. Existing profiles without
-    /// this field continue to use OpenAI Chat Completions.
-    #[serde(default)]
-    pub api_protocol: LlmApiProtocol,
-    #[serde(default)]
-    pub base_url: String,
-    #[serde(default)]
-    pub api_key: String,
-    #[serde(default)]
-    pub model: String,
-    /// Relative API path appended to `base_url`. The legacy
-    /// `chat_completions_path` key is accepted for migration.
-    #[serde(default, alias = "chat_completions_path")]
-    pub endpoint_path: String,
-    #[serde(default = "default_llm_max_token_parameter")]
-    pub max_token_parameter: LlmMaxTokenParameter,
-    #[serde(default)]
-    pub no_reasoning_control: LlmNoReasoningControl,
-    /// MLX local LLM configuration (Apple Silicon only).
-    #[serde(default)]
-    pub mlx: MlxLlmConfig,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct LlmProfileRuntimeConfig {
-    pub id: String,
-    pub name: String,
-    pub provider: String,
-    #[serde(default)]
-    pub api_protocol: LlmApiProtocol,
-    pub base_url: String,
-    pub api_key: String,
-    pub model: String,
-    #[serde(default, alias = "chat_completions_path")]
-    pub endpoint_path: String,
-    pub max_token_parameter: LlmMaxTokenParameter,
-    pub no_reasoning_control: LlmNoReasoningControl,
-    pub mlx: MlxLlmConfig,
-}
-
-impl LlmSection {
-    pub fn active_profile_config(&self) -> Result<LlmProfileRuntimeConfig> {
-        let profile = self.profiles.get(&self.active_profile).ok_or_else(|| {
-            KoeError::Config(format!("LLM profile not found: {}", self.active_profile))
-        })?;
-        Ok(profile.to_runtime_config(&self.active_profile))
-    }
-
-    pub fn profiles_payload(&self) -> LlmProfilesPayload {
-        LlmProfilesPayload {
-            active_profile: self.active_profile.clone(),
-            profiles: self.profiles.clone(),
-        }
-    }
-}
-
-impl LlmProfileConfig {
-    pub fn to_runtime_config(&self, id: &str) -> LlmProfileRuntimeConfig {
-        LlmProfileRuntimeConfig {
-            id: id.to_string(),
-            name: if self.name.is_empty() {
-                id.to_string()
-            } else {
-                self.name.clone()
-            },
-            provider: self.provider.clone(),
-            api_protocol: self.api_protocol,
-            base_url: self.base_url.clone(),
-            api_key: self.api_key.clone(),
-            model: self.model.clone(),
-            endpoint_path: self.endpoint_path.clone(),
-            max_token_parameter: self.max_token_parameter,
-            no_reasoning_control: self.no_reasoning_control,
-            mlx: self.mlx.clone(),
-        }
-    }
-}
-
-impl LlmProfileRuntimeConfig {
-    pub fn effective_api_protocol(&self) -> LlmApiProtocol {
-        match self.provider.as_str() {
-            "anthropic" => LlmApiProtocol::AnthropicMessages,
-            "apfel" => LlmApiProtocol::OpenaiChat,
-            _ => self.api_protocol,
-        }
-    }
-
-    pub fn effective_endpoint_path(&self) -> &str {
-        let configured = self.endpoint_path.trim();
-        if configured.is_empty() {
-            self.effective_api_protocol().default_endpoint_path()
-        } else {
-            configured
-        }
-    }
-
-    pub fn is_ready(&self) -> bool {
-        match self.provider.as_str() {
-            "mlx" => !self.mlx.model.is_empty(),
-            _ => !self.base_url.is_empty() && !self.model.is_empty(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct MlxLlmConfig {
-    /// Model directory name under ~/.koe/models/
-    #[serde(default = "default_mlx_llm_model")]
-    pub model: String,
-}
-
-impl Default for MlxLlmConfig {
-    fn default() -> Self {
-        Self {
-            model: default_mlx_llm_model(),
-        }
-    }
-}
-
-impl Default for LlmProfileConfig {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            provider: default_llm_provider(),
-            api_protocol: LlmApiProtocol::default(),
-            base_url: String::new(),
-            api_key: String::new(),
-            model: String::new(),
-            endpoint_path: String::new(),
-            max_token_parameter: default_llm_max_token_parameter(),
-            no_reasoning_control: LlmNoReasoningControl::default(),
-            mlx: MlxLlmConfig::default(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
-pub enum LlmMaxTokenParameter {
-    MaxTokens,
-    MaxCompletionTokens,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum LlmNoReasoningControl {
-    #[default]
-    ReasoningEffort,
-    Thinking,
-    None,
-}
-
 #[derive(Debug, Deserialize, Clone)]
 pub struct FeedbackSection {
     #[serde(default)]
@@ -602,7 +261,7 @@ impl Default for ClipboardSection {
 /// Tolerant deserialization: an invalid `clipboard` section or
 /// `restore_delay_ms` value falls back to the default with a warning instead
 /// of failing the whole config load, so a clipboard typo cannot poison
-/// unrelated ASR/LLM/hotkey settings. The warning never includes clipboard
+/// unrelated ASR/hotkey settings. The warning never includes clipboard
 /// contents — only the key name and the accepted range. Custom visitors are
 /// required (rather than deserializing into `serde_yaml::Value`) because
 /// serde_yaml hard-errors on integers wider than u64 unless the visitor
@@ -827,6 +486,14 @@ pub struct OverlaySection {
     pub limit_visible_lines: bool,
     #[serde(default = "default_overlay_max_visible_lines")]
     pub max_visible_lines: u16,
+}
+
+/// Options that affect the text delivered to the active application.
+#[derive(Debug, Deserialize, Clone)]
+pub struct OutputSection {
+    /// Remove sentence-final punctuation before pasting the recognized text.
+    #[serde(default)]
+    pub strip_trailing_punctuation: bool,
 }
 
 /// Deserialize a YAML value that can be either a string ("fn") or an integer (96)
@@ -1102,27 +769,6 @@ fn default_qwen_model() -> String {
 fn default_qwen_language() -> String {
     "zh".into()
 }
-fn default_mlx_model() -> String {
-    "mlx/Qwen3-ASR-0.6B-4bit".into()
-}
-fn default_mlx_delay_preset() -> String {
-    "realtime".into()
-}
-fn default_mlx_language() -> String {
-    "auto".into()
-}
-fn default_sherpa_onnx_model() -> String {
-    "sherpa-onnx/bilingual-zh-en".into()
-}
-fn default_sherpa_onnx_num_threads() -> i32 {
-    2
-}
-fn default_sherpa_onnx_hotwords_score() -> f32 {
-    1.5
-}
-fn default_sherpa_onnx_endpoint_silence() -> f32 {
-    1.2
-}
 fn default_glm_url() -> String {
     "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions".into()
 }
@@ -1185,117 +831,8 @@ fn default_final_wait_timeout() -> u64 {
 fn default_true() -> bool {
     true
 }
-fn default_false() -> bool {
-    false
-}
-fn default_top_p() -> f64 {
-    1.0
-}
-fn default_llm_timeout() -> u64 {
-    8000
-}
-fn default_max_output_tokens() -> u32 {
-    1024
-}
-fn default_dictionary_max_candidates() -> usize {
-    0
-}
-fn default_llm_max_token_parameter() -> LlmMaxTokenParameter {
-    LlmMaxTokenParameter::MaxCompletionTokens
-}
-fn default_llm_provider() -> String {
-    "openai".into()
-}
-fn default_llm_active_profile() -> String {
-    "openai".into()
-}
-fn default_llm_profiles() -> BTreeMap<String, LlmProfileConfig> {
-    let mut profiles = BTreeMap::new();
-    profiles.insert(
-        "apfel".into(),
-        LlmProfileConfig {
-            name: "APFEL".into(),
-            provider: "apfel".into(),
-            api_protocol: LlmApiProtocol::OpenaiChat,
-            base_url: "http://127.0.0.1:11434/v1".into(),
-            api_key: String::new(),
-            model: "apple-foundationmodel".into(),
-            endpoint_path: "/chat/completions".into(),
-            max_token_parameter: LlmMaxTokenParameter::MaxTokens,
-            no_reasoning_control: LlmNoReasoningControl::None,
-            mlx: MlxLlmConfig::default(),
-        },
-    );
-    profiles.insert(
-        "mlx".into(),
-        LlmProfileConfig {
-            name: "MLX (Apple Silicon)".into(),
-            provider: "mlx".into(),
-            api_protocol: LlmApiProtocol::OpenaiChat,
-            base_url: String::new(),
-            api_key: String::new(),
-            model: String::new(),
-            endpoint_path: String::new(),
-            max_token_parameter: LlmMaxTokenParameter::MaxTokens,
-            no_reasoning_control: LlmNoReasoningControl::None,
-            mlx: MlxLlmConfig::default(),
-        },
-    );
-    profiles.insert(
-        "openai".into(),
-        LlmProfileConfig {
-            name: "OpenAI Chat Completions".into(),
-            provider: "openai".into(),
-            api_protocol: LlmApiProtocol::OpenaiChat,
-            base_url: "https://api.openai.com/v1".into(),
-            api_key: String::new(),
-            model: "gpt-5.4-nano".into(),
-            endpoint_path: "/chat/completions".into(),
-            max_token_parameter: LlmMaxTokenParameter::MaxCompletionTokens,
-            no_reasoning_control: LlmNoReasoningControl::None,
-            mlx: MlxLlmConfig::default(),
-        },
-    );
-    profiles.insert(
-        "openai-responses".into(),
-        LlmProfileConfig {
-            name: "OpenAI Responses".into(),
-            provider: "openai".into(),
-            api_protocol: LlmApiProtocol::OpenaiResponses,
-            base_url: "https://api.openai.com/v1".into(),
-            api_key: String::new(),
-            model: "gpt-5.4-nano".into(),
-            endpoint_path: "/responses".into(),
-            max_token_parameter: LlmMaxTokenParameter::MaxCompletionTokens,
-            no_reasoning_control: LlmNoReasoningControl::None,
-            mlx: MlxLlmConfig::default(),
-        },
-    );
-    profiles.insert(
-        "anthropic".into(),
-        LlmProfileConfig {
-            name: "Anthropic Messages".into(),
-            provider: "anthropic".into(),
-            api_protocol: LlmApiProtocol::AnthropicMessages,
-            base_url: "https://api.anthropic.com/v1".into(),
-            api_key: String::new(),
-            model: String::new(),
-            endpoint_path: "/messages".into(),
-            max_token_parameter: LlmMaxTokenParameter::MaxTokens,
-            no_reasoning_control: LlmNoReasoningControl::None,
-            mlx: MlxLlmConfig::default(),
-        },
-    );
-    profiles
-}
-fn default_mlx_llm_model() -> String {
-    "mlx/Qwen3-0.6B-4bit".into()
-}
 fn default_dictionary_path() -> String {
     "dictionary.txt".into()
-}
-fn default_system_prompt_path() -> String {
-    "system_prompt.txt".into()
 }
 fn default_trigger_key() -> String {
     "fn".into()
@@ -1303,10 +840,6 @@ fn default_trigger_key() -> String {
 
 fn default_trigger_mode() -> String {
     "hold".into()
-}
-
-fn default_user_prompt_path() -> String {
-    "user_prompt.txt".into()
 }
 
 fn default_overlay_font_family() -> String {
@@ -1329,68 +862,6 @@ fn default_overlay_max_visible_lines() -> u16 {
     3
 }
 
-fn default_translate_to_english_prompt_template() -> PromptTemplate {
-    PromptTemplate {
-        name: "翻译英文".into(),
-        enabled: true,
-        shortcut: 1,
-        system_prompt: Some(
-            "将用户的语音输入翻译为流畅的英文。保持原意，不要添加额外内容。只输出翻译结果。".into(),
-        ),
-        system_prompt_path: None,
-    }
-}
-
-fn default_prompt_templates() -> Vec<PromptTemplate> {
-    vec![default_translate_to_english_prompt_template()]
-}
-
-fn legacy_default_prompt_templates() -> Vec<PromptTemplate> {
-    vec![
-        default_translate_to_english_prompt_template(),
-        PromptTemplate {
-            name: "繁体中文".into(),
-            enabled: true,
-            shortcut: 2,
-            system_prompt: Some(
-                "将用户的语音输入翻译为流畅的繁体中文。保持原意，不要添加额外内容。只输出翻译结果。"
-                    .into(),
-            ),
-            system_prompt_path: None,
-        },
-        PromptTemplate {
-            name: "推文风格".into(),
-            enabled: true,
-            shortcut: 3,
-            system_prompt: Some(
-                "将用户的语音输入改写为适合发 Twitter/X 的简短推文。280字符以内，可适当加emoji。只输出推文内容。"
-                    .into(),
-            ),
-            system_prompt_path: None,
-        },
-        PromptTemplate {
-            name: "小红书".into(),
-            enabled: true,
-            shortcut: 4,
-            system_prompt: Some(
-                "将用户的语音输入改写为适合小红书的帖子风格。加上合适的emoji和标题，语气活泼亲切。只输出帖子内容。"
-                    .into(),
-            ),
-            system_prompt_path: None,
-        },
-        PromptTemplate {
-            name: "优化技术名词".into(),
-            enabled: true,
-            shortcut: 5,
-            system_prompt: Some(
-                "将用户的语音输入中包含的技术相关名词进行校正。保持原意，不要添加额外内容。只输出校正之后的结果。"
-                    .into(),
-            ),
-            system_prompt_path: None,
-        },
-    ]
-}
-
 impl Default for Config {
     fn default() -> Self {
         serde_yaml::from_str("{}").unwrap()
@@ -1406,11 +877,6 @@ impl Default for DoubaoAsrConfig {
         serde_yaml::from_str("{}").unwrap()
     }
 }
-impl Default for LlmSection {
-    fn default() -> Self {
-        serde_yaml::from_str("{}").unwrap()
-    }
-}
 impl Default for FeedbackSection {
     fn default() -> Self {
         serde_yaml::from_str("{}").unwrap()
@@ -1422,6 +888,11 @@ impl Default for DictionarySection {
     }
 }
 impl Default for OverlaySection {
+    fn default() -> Self {
+        serde_yaml::from_str("{}").unwrap()
+    }
+}
+impl Default for OutputSection {
     fn default() -> Self {
         serde_yaml::from_str("{}").unwrap()
     }
@@ -1455,52 +926,9 @@ fn resolve_path(p: &str) -> PathBuf {
     }
 }
 
-impl PromptTemplate {
-    /// Resolve the system prompt: inline text takes priority, then file path.
-    pub fn resolve_system_prompt(&self) -> Option<String> {
-        if let Some(ref text) = self.system_prompt {
-            let trimmed = text.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-        if let Some(ref path) = self.system_prompt_path {
-            let resolved = resolve_path(path);
-            if let Ok(content) = std::fs::read_to_string(&resolved) {
-                let trimmed = content.trim().to_string();
-                if !trimmed.is_empty() {
-                    return Some(trimmed);
-                }
-            }
-        }
-        None
-    }
-}
-
-/// Resolve a model directory path.
-/// Absolute paths are used directly; relative paths are resolved under ~/.koe/models/.
-pub fn resolve_model_dir(model: &str) -> PathBuf {
-    let path = Path::new(model);
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        crate::model_manager::models_dir().join(model)
-    }
-}
-
 /// Resolve dictionary path (relative to config dir).
 pub fn resolve_dictionary_path(config: &Config) -> PathBuf {
     resolve_path(&config.dictionary.path)
-}
-
-/// Resolve system prompt path (relative to config dir).
-pub fn resolve_system_prompt_path(config: &Config) -> PathBuf {
-    resolve_path(&config.llm.system_prompt_path)
-}
-
-/// Resolve user prompt path (relative to config dir).
-pub fn resolve_user_prompt_path(config: &Config) -> PathBuf {
-    resolve_path(&config.llm.user_prompt_path)
 }
 
 // ─── Environment Variable Substitution ──────────────────────────────
@@ -1689,47 +1117,6 @@ fn normalize_hotkey_config(path: &Path, config: &Config) -> Result<bool> {
     Ok(true)
 }
 
-/// Replace the previous bundled template set with the new minimal default,
-/// but only when the user still has the legacy built-in templates unchanged.
-fn normalize_prompt_templates_config(path: &Path, config: &Config) -> Result<bool> {
-    if config.prompt_templates != legacy_default_prompt_templates() {
-        return Ok(false);
-    }
-
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| KoeError::Config(format!("read {}: {e}", path.display())))?;
-
-    let mut doc: serde_yaml::Value = serde_yaml::from_str(&raw)
-        .map_err(|e| KoeError::Config(format!("parse {}: {e}", path.display())))?;
-
-    let doc_map = match doc.as_mapping_mut() {
-        Some(map) => map,
-        None => return Ok(false),
-    };
-
-    let yaml_templates = serde_yaml::to_value(default_prompt_templates())
-        .map_err(|e| KoeError::Config(format!("serialize prompt templates: {e}")))?;
-
-    doc_map.insert(
-        serde_yaml::Value::String("prompt_templates".into()),
-        yaml_templates,
-    );
-
-    let yaml_str = serde_yaml::to_string(&doc)
-        .map_err(|e| KoeError::Config(format!("serialize normalized config: {e}")))?;
-
-    let output = format!(
-        "# Koe - Voice Input Tool Configuration\n\
-         # ~/.koe/config.yaml\n\n\
-         {yaml_str}"
-    );
-
-    atomic_write_file(path, &output)?;
-
-    log::info!("normalized legacy prompt templates on disk");
-    Ok(true)
-}
-
 // ─── Load & Ensure ─────────────────────────────────────────────────
 
 /// Load config from ~/.koe/config.yaml.
@@ -1757,21 +1144,8 @@ pub fn load_config() -> Result<Config> {
 
     let substituted = substitute_env_vars(&raw);
 
-    let mut config: Config = serde_yaml::from_str(&substituted)
+    let config: Config = serde_yaml::from_str(&substituted)
         .map_err(|e| KoeError::Config(format!("parse {}: {e}", path.display())))?;
-
-    match normalize_prompt_templates_config(&path, &config) {
-        Ok(true) => {
-            log::info!("config file updated with minimal default prompt templates");
-            let raw = std::fs::read_to_string(&path)
-                .map_err(|e| KoeError::Config(format!("read {}: {e}", path.display())))?;
-            let substituted = substitute_env_vars(&raw);
-            config = serde_yaml::from_str(&substituted)
-                .map_err(|e| KoeError::Config(format!("parse {}: {e}", path.display())))?;
-        }
-        Ok(false) => {}
-        Err(e) => log::warn!("prompt templates normalization failed: {e}"),
-    }
 
     match normalize_hotkey_config(&path, &config) {
         Ok(true) => log::info!("config file updated with normalized hotkey settings"),
@@ -1788,8 +1162,6 @@ pub fn ensure_defaults() -> Result<bool> {
     let dir = config_dir();
     let config_file = config_path();
     let dict_file = dir.join("dictionary.txt");
-    let system_prompt_file = dir.join("system_prompt.txt");
-    let user_prompt_file = dir.join("user_prompt.txt");
 
     let mut created = false;
 
@@ -1815,8 +1187,6 @@ pub fn ensure_defaults() -> Result<bool> {
     let defaults: &[(&std::path::Path, &str)] = &[
         (&config_file, DEFAULT_CONFIG_YAML),
         (&dict_file, DEFAULT_DICTIONARY_TXT),
-        (&system_prompt_file, DEFAULT_SYSTEM_PROMPT),
-        (&user_prompt_file, DEFAULT_USER_PROMPT),
     ];
 
     for (path, content) in defaults {
@@ -1844,21 +1214,6 @@ pub fn ensure_defaults() -> Result<bool> {
                  readable by other local users — fix its permissions manually",
                 config_file.display()
             );
-        }
-    }
-
-    // Install default model manifests into ~/.koe/models/
-    let models_dir = crate::model_manager::models_dir();
-    for (rel_path, content) in DEFAULT_MANIFESTS {
-        let manifest_dir = models_dir.join(rel_path);
-        let manifest_file = manifest_dir.join(".koe-manifest.json");
-        if !manifest_file.exists() {
-            std::fs::create_dir_all(&manifest_dir)
-                .map_err(|e| KoeError::Config(format!("create {}: {e}", manifest_dir.display())))?;
-            std::fs::write(&manifest_file, content)
-                .map_err(|e| KoeError::Config(format!("write {}: {e}", manifest_file.display())))?;
-            log::info!("installed manifest: {}", manifest_file.display());
-            created = true;
         }
     }
 
@@ -1983,36 +1338,6 @@ pub fn config_set(key_path: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn llm_profiles_payload() -> Result<LlmProfilesPayload> {
-    Ok(load_config()?.llm.profiles_payload())
-}
-
-pub fn save_llm_profiles_payload(payload: &LlmProfilesPayload) -> Result<()> {
-    let path = config_path();
-    let raw = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut root: serde_yaml::Value = if raw.trim().is_empty() {
-        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
-    } else {
-        serde_yaml::from_str(&raw)
-            .map_err(|e| KoeError::Config(format!("parse {}: {e}", path.display())))?
-    };
-
-    let llm_map = navigate_to_parent(&mut root, &["llm"]);
-    llm_map.insert(
-        serde_yaml::Value::String("active_profile".into()),
-        serde_yaml::Value::String(payload.active_profile.clone()),
-    );
-    let profiles_value = serde_yaml::to_value(&payload.profiles)
-        .map_err(|e| KoeError::Config(format!("serialize LLM profiles: {e}")))?;
-    llm_map.insert(serde_yaml::Value::String("profiles".into()), profiles_value);
-
-    let serialized =
-        serde_yaml::to_string(&root).map_err(|e| KoeError::Config(format!("serialize: {e}")))?;
-    atomic_write_file(&path, &serialized)?;
-
-    Ok(())
-}
-
 /// Recursively navigate into nested YAML mappings by path segments, creating
 /// intermediate mappings as needed. Returns a mutable ref to the final mapping.
 fn navigate_to_parent<'a>(
@@ -2050,7 +1375,7 @@ const DEFAULT_CONFIG_YAML: &str = r#"# Koe - Voice Input Tool Configuration
 # ~/.koe/config.yaml
 
 asr:
-  # ASR provider: "doubaoime" (default, free), "doubao", "qwen", "glm", "mimo", "apple-speech", "mlx", "sherpa-onnx"
+  # Online ASR provider: "doubaoime" (default, free), "doubao", "qwen", "glm", or "mimo"
   provider: "doubaoime"
 
   # DoubaoIME (豆包输入法) free ASR — no API key required, auto device registration
@@ -2106,85 +1431,6 @@ asr:
     model: "mimo-v2.5-asr"
     language: "auto"     # auto | zh-CN | en-US | ja-JP 等
 
-  # Apple Speech local ASR (macOS 26+, zero-config, no model download)
-  apple-speech:
-    locale: "zh_CN"                 # zh_CN | en_US | en_GB | ja_JP | ko_KR
-
-  # MLX local ASR (Apple Silicon only)
-  mlx:
-    model: "mlx/Qwen3-ASR-0.6B-4bit"       # relative to ~/.koe/models/, or absolute path
-    delay_preset: "realtime"    # realtime | agent | subtitle
-    language: "auto"            # auto | zh | en
-
-  # Sherpa-ONNX local ASR (CPU)
-  sherpa-onnx:
-    model: "sherpa-onnx/bilingual-zh-en"    # relative to ~/.koe/models/, or absolute path
-    num_threads: 2
-    hotwords_score: 1.5         # dictionary term boost
-    endpoint_silence: 1.2       # trailing silence for sentence boundary (seconds)
-
-llm:
-  # Off by default: a fresh install has no api_key below, so leaving this on
-  # would fail every dictation until the user configures a profile. Turn it on
-  # from Settings → LLM once a profile has credentials.
-  enabled: false
-  prompt_templates_enabled: false  # show rewrite template buttons above the overlay after transcription
-  auto_paste_processed_text: true  # paste the first LLM-processed result into the active input immediately
-  active_profile: "openai"
-  temperature: 0
-  top_p: 1
-  timeout_ms: 8000
-  max_output_tokens: 1024
-  dictionary_max_candidates: 0             # 0 = send all entries to LLM
-  system_prompt_path: "system_prompt.txt"  # relative to ~/.koe/
-  user_prompt_path: "user_prompt.txt"      # relative to ~/.koe/
-  profiles:
-    openai:
-      name: "OpenAI Chat Completions"
-      provider: "openai"
-      api_protocol: "openai_chat"
-      base_url: "https://api.openai.com/v1"
-      api_key: ""          # or use ${LLM_API_KEY}
-      model: "gpt-5.4-nano"
-      endpoint_path: "/chat/completions"  # relative path appended to base_url
-      max_token_parameter: "max_completion_tokens"
-      no_reasoning_control: "none"
-    openai-responses:
-      name: "OpenAI Responses"
-      provider: "openai"
-      api_protocol: "openai_responses"
-      base_url: "https://api.openai.com/v1"
-      api_key: ""          # or use ${LLM_API_KEY}
-      model: "gpt-5.4-nano"
-      endpoint_path: "/responses"
-      max_token_parameter: "max_completion_tokens"
-      no_reasoning_control: "none"
-    anthropic:
-      name: "Anthropic Messages"
-      provider: "anthropic"
-      api_protocol: "anthropic_messages"
-      base_url: "https://api.anthropic.com/v1"
-      api_key: ""          # or use ${ANTHROPIC_API_KEY}
-      model: ""            # choose any text-capable model from /models
-      endpoint_path: "/messages"
-      max_token_parameter: "max_tokens"
-      no_reasoning_control: "none"
-    apfel:
-      name: "APFEL"
-      provider: "apfel"
-      api_protocol: "openai_chat"
-      base_url: "http://127.0.0.1:11434/v1"
-      api_key: ""           # optional; leave blank to send no Authorization header
-      model: "apple-foundationmodel"
-      endpoint_path: "/chat/completions"  # customize for non-standard OpenAI-compatible endpoints
-      max_token_parameter: "max_tokens"
-      no_reasoning_control: "none"
-    mlx:
-      name: "MLX (Apple Silicon)"
-      provider: "mlx"
-      mlx:
-        model: "mlx/Qwen3-0.6B-4bit"      # relative to ~/.koe/models/, or absolute path
-
 feedback:
   start_sound: false
   stop_sound: false
@@ -2215,47 +1461,18 @@ overlay:
   limit_visible_lines: true
   max_visible_lines: 3
 
-prompt_templates:
-  - name: "翻译英文"
-    enabled: true
-    shortcut: 1
-    system_prompt: "将用户的语音输入翻译为流畅的英文。保持原意，不要添加额外内容。只输出翻译结果。"
+output:
+  # true: remove punctuation characters at the end of the recognized text
+  strip_trailing_punctuation: false
 
-# 实验性功能（默认全部关闭）
-experimental:
-  # ASR 识别完成后立即粘贴原始文本，LLM 修正返回后再原位替换。
-  # 仅在焦点、光标和已粘贴文本均未变化、且目标应用支持辅助功能文本替换时
-  # 才会替换；无法安全替换时保留原文，修正版进入剪贴板。
-  paste_asr_first: false
 "#;
 
 const DEFAULT_DICTIONARY_TXT: &str = r#"# Koe User Dictionary
-# One term per line. These terms are prioritized during LLM correction.
+# One term per line. These terms are used as provider-side recognition hints
+# where the selected online ASR provider supports them.
 # Lines starting with # are comments.
 
 "#;
-
-const DEFAULT_SYSTEM_PROMPT: &str = include_str!("default_system_prompt.txt");
-
-const DEFAULT_USER_PROMPT: &str = include_str!("default_user_prompt.txt");
-
-/// Default model manifests: (relative_path, json_content).
-/// relative_path maps to ~/.koe/models/<relative_path>/.koe-manifest.json
-macro_rules! manifest {
-    ($path:literal) => {
-        ($path, include_str!(concat!("manifests/", $path, ".json")))
-    };
-}
-const DEFAULT_MANIFESTS: &[(&str, &str)] = &[
-    manifest!("mlx/Qwen3-ASR-0.6B-4bit"),
-    manifest!("mlx/Qwen3-ASR-1.7B-4bit"),
-    manifest!("mlx/Qwen3-0.6B-4bit"),
-    manifest!("mlx/Qwen3-1.7B-4bit"),
-    manifest!("sherpa-onnx/bilingual-zh-en"),
-    manifest!("sherpa-onnx/multilingual-8lang"),
-    manifest!("sherpa-onnx/zh-xlarge"),
-    manifest!("wetype/embed140m"),
-];
 
 #[cfg(test)]
 mod tests {
@@ -2356,18 +1573,18 @@ mod tests {
     }
 
     #[test]
-    fn config_default_includes_single_translation_template() {
+    fn config_default_includes_overlay_defaults() {
         let config = Config::default();
-        assert_eq!(config.prompt_templates, default_prompt_templates());
-        assert!(config.llm.auto_paste_processed_text);
         assert_eq!(config.overlay.font_family, "system");
         assert_eq!(config.overlay.font_size, 13);
         assert_eq!(config.overlay.bottom_margin, 10);
         assert!(config.overlay.limit_visible_lines);
         assert_eq!(config.overlay.max_visible_lines, 3);
+        assert!(!config.output.strip_trailing_punctuation);
     }
 
     #[test]
+    #[cfg(any())]
     fn normalize_prompt_templates_config_replaces_legacy_defaults() {
         let path = temp_config_path("prompt-templates");
         let mut doc = serde_yaml::Mapping::new();
@@ -2399,6 +1616,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any())]
     fn default_llm_config_includes_all_remote_protocols_and_local_profiles() {
         let llm = LlmSection::default();
 
@@ -2427,6 +1645,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any())]
     fn active_profile_config_resolves_apfel_profile() {
         let llm = LlmSection {
             active_profile: "apfel".into(),
@@ -2446,6 +1665,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any())]
     fn legacy_profile_defaults_to_chat_and_accepts_legacy_path_key() {
         let profile: LlmProfileRuntimeConfig = serde_json::from_value(serde_json::json!({
             "id": "openai",
@@ -2466,6 +1686,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any())]
     fn empty_endpoint_uses_each_protocol_default() {
         for (protocol, expected) in [
             (LlmApiProtocol::OpenaiChat, "/chat/completions"),
@@ -2490,6 +1711,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any())]
     fn mlx_profile_requires_model() {
         let mut llm = LlmSection {
             active_profile: "mlx".into(),
@@ -2584,11 +1806,11 @@ mod tests {
         fs::write(koe_dir2.join("config.yaml"), "asr:\n  provider: doubao\n").unwrap();
 
         home.set(&tmp2);
-        let ok_result = config_set("llm.enabled", "true");
+        let ok_result = config_set("output.strip_trailing_punctuation", "true");
 
         assert!(ok_result.is_ok(), "config_set should succeed on valid YAML");
         let content = fs::read_to_string(koe_dir2.join("config.yaml")).unwrap();
-        assert!(content.contains("enabled: true"));
+        assert!(content.contains("strip_trailing_punctuation: true"));
         let _ = fs::remove_dir_all(&tmp2);
     }
 
@@ -2675,7 +1897,7 @@ mod tests {
 
         // Write two bool keys.
         config_set("asr.doubao.enable_accelerate_text", "true").unwrap();
-        config_set("llm.prompt_templates_enabled", "true").unwrap();
+        config_set("output.strip_trailing_punctuation", "true").unwrap();
 
         // Both round-trip as the exact string "true".
         assert_eq!(
@@ -2684,9 +1906,9 @@ mod tests {
             "asr.doubao.enable_accelerate_text should be \"true\""
         );
         assert_eq!(
-            config_get("llm.prompt_templates_enabled").unwrap(),
+            config_get("output.strip_trailing_punctuation").unwrap(),
             "true",
-            "llm.prompt_templates_enabled should be \"true\""
+            "output.strip_trailing_punctuation should be \"true\""
         );
 
         // Setting an unrelated third key must not clobber the first two.
@@ -2698,9 +1920,9 @@ mod tests {
             "asr.doubao.enable_accelerate_text should still be \"true\" after sibling write"
         );
         assert_eq!(
-            config_get("llm.prompt_templates_enabled").unwrap(),
+            config_get("output.strip_trailing_punctuation").unwrap(),
             "true",
-            "llm.prompt_templates_enabled should still be \"true\" after sibling write"
+            "output.strip_trailing_punctuation should still be \"true\" after sibling write"
         );
 
         let _ = fs::remove_dir_all(&tmp);
@@ -2775,14 +1997,11 @@ mod tests {
         let yaml = r#"
 asr:
   provider: "qwen"
-llm:
-  timeout_ms: 1234
 clipboard:
   restore_delay_ms: "not-a-number"
 "#;
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.clipboard.restore_delay_ms, 1500);
         assert_eq!(config.asr.provider, "qwen");
-        assert_eq!(config.llm.timeout_ms, 1234);
     }
 }

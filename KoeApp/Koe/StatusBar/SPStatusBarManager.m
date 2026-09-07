@@ -23,7 +23,6 @@ static const CGFloat kIconSize = 18.0;
 @property (nonatomic, strong) NSMenuItem *accessibilityPermissionItem;
 @property (nonatomic, strong) NSMenuItem *inputMonitoringPermissionItem;
 @property (nonatomic, strong) NSMenuItem *notificationPermissionItem;
-@property (nonatomic, strong) NSMenuItem *speechRecognitionPermissionItem;
 @property (nonatomic, strong) NSMenuItem *hotkeyDisplayItem;
 @property (nonatomic, strong) NSMenuItem *voiceInputItem;
 @property (nonatomic, strong) NSMenuItem *statsCountItem;
@@ -337,13 +336,6 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
     self.notificationPermissionItem.enabled = NO;
     [menu addItem:self.notificationPermissionItem];
 
-    self.speechRecognitionPermissionItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:KoeLocalizedString(@"statusBar.permission.speechRecognition"), KoeLocalizedString(@"statusBar.permission.checking")]
-                                                                     action:nil
-                                                              keyEquivalent:@""];
-    self.speechRecognitionPermissionItem.enabled = NO;
-    self.speechRecognitionPermissionItem.hidden = YES;
-    [menu addItem:self.speechRecognitionPermissionItem];
-
     [menu addItem:[NSMenuItem separatorItem]];
 
     // Microphone selection submenu
@@ -439,16 +431,6 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
         self.notificationPermissionItem.enabled = !notifGranted;
     }];
 
-    // Speech Recognition — only visible when apple-speech provider is configured
-    char *rawProvider = sp_config_get("asr.provider");
-    BOOL isAppleSpeech = rawProvider && strcmp(rawProvider, "apple-speech") == 0;
-    if (rawProvider) sp_core_free_string(rawProvider);
-    self.speechRecognitionPermissionItem.hidden = !isAppleSpeech;
-    if (isAppleSpeech) {
-        BOOL speechGranted = [self.permissionManager isSpeechRecognitionGranted];
-        self.speechRecognitionPermissionItem.title = [NSString stringWithFormat:KoeLocalizedString(@"statusBar.permission.speechRecognition"),
-                                                       speechGranted ? granted : notGranted];
-    }
 }
 
 - (void)openMicrophoneSettings {
@@ -782,10 +764,6 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
         self.statusMenuItem.title = KoeLocalizedString(@"statusBar.status.recognizing");
         [self startProcessingAnimation];
 
-    } else if ([state isEqualToString:@"correcting"]) {
-        self.statusMenuItem.title = KoeLocalizedString(@"statusBar.status.thinking");
-        [self startProcessingAnimation];
-
     } else if ([state hasPrefix:@"preparing_paste"] || [state isEqualToString:@"pasting"]) {
         self.statusMenuItem.title = KoeLocalizedString(@"statusBar.status.pasting");
         [self applyPasteIcon];
@@ -802,7 +780,7 @@ static NSString *displayNameForHotkeyValue(NSString *value) {
 
 /// The manual voice-input item mirrors `currentState`: idle/completed can start
 /// a session, any `recording*` state can stop it, and every intermediate state
-/// (connecting, finalizing, correcting, pasting, error) offers neither.
+/// (connecting, finalizing, pasting, error) offers neither.
 - (void)refreshVoiceInputItem {
     BOOL recording = [self.currentState hasPrefix:@"recording"];
     BOOL idle = [self.currentState isEqualToString:@"idle"] ||

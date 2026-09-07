@@ -1,78 +1,46 @@
-# koe-asr
+# koe-asr（在线 ASR）
 
-A Rust library for streaming ASR (Automatic Speech Recognition) with a unified async interface across multiple cloud and local provider backends.
+`koe-asr` 为 Koe 提供统一的异步在线语音识别接口。本定制版只包含在线服务，不包含本地模型或本地推理代码。
 
-## Features
+## 支持的服务商
 
-- **Unified `AsrProvider` trait** — swap providers without changing application logic
-- **Streaming recognition** — receive interim, definite, and final results as audio is processed
-- **Cloud providers** — Volcengine Doubao, Doubao IME (free), Alibaba Qwen
-- **Local providers** — Apple Speech Framework, MLX Whisper (Apple Silicon), Sherpa-ONNX, WeType (on-device Chinese, pure-Rust)
-- **TranscriptAggregator** — built-in helper to merge streaming events into a single transcript
-- **Hotword support** — boost recognition accuracy for domain-specific vocabulary
-- **Async/await** — built on `tokio` with `async-trait`
+| 配置名 | 服务 | 凭证 |
+|---|---|---|
+| `doubaoime` | 豆包输入法在线识别 | 不需要用户填写密钥 |
+| `doubao` | 火山引擎豆包 | App Key + Access Key |
+| `qwen` | 阿里云百炼通义千问 | API Key |
+| `glm` | 智谱 GLM | API Key |
+| `mimo` | 小米 MiMo | API Key |
 
-## Providers
+## 使用方式
 
-| Provider | Backend | Feature Flag | Connection | Credentials |
-|---|---|---|---|---|
-| `DoubaoWsProvider` | Volcengine Seed-ASR | *(default)* | WebSocket | App Key + Access Key |
-| `DoubaoImeProvider` | Doubao IME | *(default)* | WebSocket | None (auto device registration) |
-| `QwenAsrProvider` | Alibaba DashScope Qwen-ASR | *(default)* | WebSocket | API Key |
-| `AppleSpeechProvider` | macOS Speech Framework | `apple-speech` | Local | None |
-| `MlxProvider` | MLX Whisper (Apple Silicon) | `mlx` | Local | None (local model) |
-| `SherpaOnnxProvider` | Sherpa-ONNX | `sherpa-onnx` | Local | None (local model) |
-| `WeTypeOfflineProvider` | WeType `embed_140m` (on-device Chinese, pure-Rust) | `wetype-offline` | Local | None (downloads model) |
-
-## Installation
-
-Add `koe-asr` to your `Cargo.toml`:
+在 `Cargo.toml` 中引用：
 
 ```toml
 [dependencies]
-koe-asr = { git = "https://github.com/missuo/koe.git" }
+koe-asr = { path = "../koe-asr" }
 ```
 
-To enable optional local providers:
-
-```toml
-[dependencies]
-koe-asr = { git = "https://github.com/missuo/koe.git", features = ["sherpa-onnx"] }
-```
-
-## Quick Start
-
-### Doubao (Volcengine Cloud ASR)
+所有服务商都实现同一个 `AsrProvider` 接口：
 
 ```rust
-use koe_asr::{AsrConfig, AsrEvent, AsrProvider, DoubaoWsProvider, TranscriptAggregator};
+use koe_asr::{AsrConfig, AsrEvent, AsrProvider, DoubaoImeProvider};
 
 #[tokio::main]
 async fn main() -> Result<(), koe_asr::AsrError> {
-    let config = AsrConfig {
-        app_key: "your-app-key".into(),
-        access_key: "your-access-key".into(),
-        // Defaults: 16kHz sample rate, DDC/ITN/punctuation/two-pass enabled
-        ..Default::default()
-    };
+    let mut asr = DoubaoImeProvider::new();
+    asr.connect(&AsrConfig::default()).await?;
 
-    let mut asr = DoubaoWsProvider::new();
-    asr.connect(&config).await?;
-
-    // Feed PCM 16-bit LE mono audio in chunks
+    // 持续发送 16 kHz、单声道、16-bit little-endian PCM 音频。
     // asr.send_audio(&pcm_chunk).await?;
-
-    // Signal end of audio input
     asr.finish_input().await?;
 
-    // Collect results
-    let mut aggregator = TranscriptAggregator::new();
     loop {
         match asr.next_event().await? {
-            AsrEvent::Interim(text) => aggregator.update_interim(&text),
-            AsrEvent::Definite(text) => aggregator.update_definite(&text),
+            AsrEvent::Interim(text) => println!("中间结果：{text}"),
+            AsrEvent::Definite(text) => println!("确定结果：{text}"),
             AsrEvent::Final(text) => {
-                aggregator.update_final(&text);
+                println!("最终结果：{text}");
                 break;
             }
             AsrEvent::Closed(_) => break,
@@ -80,267 +48,19 @@ async fn main() -> Result<(), koe_asr::AsrError> {
         }
     }
 
-    println!("Result: {}", aggregator.best_text());
     asr.close().await?;
     Ok(())
 }
 ```
 
-### Qwen (Alibaba Cloud ASR)
+实际应用通常使用 `TranscriptAggregator` 合并中间结果、确定结果和最终结果；Koe 主程序已经包含完整的会话处理逻辑。
 
-```rust
-use koe_asr::{AsrConfig, AsrEvent, AsrProvider, QwenAsrProvider, TranscriptAggregator};
+## 说明
 
-#[tokio::main]
-async fn main() -> Result<(), koe_asr::AsrError> {
-    let config = AsrConfig {
-        access_key: "your-dashscope-api-key".into(),
-        language: Some("zh".into()),
-        ..Default::default()
-    };
+- 该 crate 的在线服务调用仍需要网络连接。
+- 服务商的 API 密钥由上层配置传入，不会由 crate 固定保存。
+- 本定制版不再提供 Apple Speech、MLX、Sherpa-ONNX 或 WeType 后端，也不提供本地模型下载接口。
 
-    let mut asr = QwenAsrProvider::new();
-    asr.connect(&config).await?;
+## 许可证
 
-    // Same streaming loop as Doubao...
-    // asr.send_audio(&pcm_chunk).await?;
-    // asr.finish_input().await?;
-    // loop { match asr.next_event().await? { ... } }
-
-    asr.close().await?;
-    Ok(())
-}
-```
-
-### Doubao IME (Free, No API Key Required)
-
-> **Compatibility note — the current provider is incompatible with older
-> releases (and vice versa).** The IME backend changed both its
-> authentication and its result format in 2026:
->
-> - Authentication now uses the fixed app key baked into the official IME
->   app, registered via `log-klink.zijieapi.com`. The per-install app key
->   that older versions (≤ v1.0.30) fetched from the `snssdk.com` settings
->   endpoint has been retired server-side, so those versions can no longer
->   connect at all.
-> - Under the fixed app key, each `results` array carries **two parallel
->   tracks**: `results[0]` is the cumulative transcript of the whole session
->   (re-punctuated across segment boundaries as recognition improves), and
->   `results[1..]` are per-segment streaming entries tagged with
->   `extra.seq_id`, used by the official IME for incremental display.
->   v1.0.31 authenticated with the new key but still parsed the array the
->   old way — concatenating every entry — which duplicated each utterance
->   ("你好" came out as "你好，你好"). The current provider reads only
->   `results[0]` and is written for this two-track format exclusively; there
->   is no fallback to the old single-track parsing.
->
-> To inspect the live wire format (it has changed twice now), use the opt-in
-> harness in `tests/doubaoime_debug_test.rs`.
-
-```rust
-use koe_asr::{AsrConfig, AsrEvent, AsrProvider, DoubaoImeProvider, TranscriptAggregator};
-
-#[tokio::main]
-async fn main() -> Result<(), koe_asr::AsrError> {
-    // DoubaoImeProvider handles device registration automatically.
-    // No API key needed — credentials are stored locally after first use.
-    let config = AsrConfig::default();
-
-    let mut asr = DoubaoImeProvider::new();
-    asr.connect(&config).await?;
-
-    // Same streaming loop...
-    asr.close().await?;
-    Ok(())
-}
-```
-
-### Sherpa-ONNX (Local, Offline)
-
-```rust
-use koe_asr::{AsrConfig, AsrEvent, AsrProvider, SherpaOnnxConfig, SherpaOnnxProvider, TranscriptAggregator};
-use std::path::PathBuf;
-
-#[tokio::main]
-async fn main() -> Result<(), koe_asr::AsrError> {
-    let sherpa_config = SherpaOnnxConfig {
-        model_dir: PathBuf::from("/path/to/sherpa-onnx-model/"),
-        num_threads: 4,
-        hotwords: vec!["custom term".into()],
-        hotwords_score: 1.5,
-        endpoint_silence: 0.8,
-    };
-
-    let mut asr = SherpaOnnxProvider::new(sherpa_config);
-    // Local providers ignore AsrConfig, but the trait requires it
-    asr.connect(&AsrConfig::default()).await?;
-
-    // Same streaming loop...
-    asr.close().await?;
-    Ok(())
-}
-```
-
-### WeType (On-Device Chinese, Pure-Rust)
-
-Fully local Chinese speech-to-text — a pure-Rust reimplementation of WeChat
-Input Method's on-device `embed_140m` model (a 40-layer pre-norm Transformer
-CTC, reverse-engineered from its XNET blob). No network, no account, and no
-external inference engine — just `ndarray` (matmuls) and `rustfft` (FBank).
-Weights are kept int8-resident (~180 MB RAM) and shared across sessions.
-It emits live interim results via the model's native **KV-cache streaming**,
-then a full-quality final transcript when you stop.
-
-Needs a directory holding `embed140m.koepack` (~135 MB) and
-`dict.decoder.utf8.txt`; `ensure_and_new` downloads and SHA-256-verifies them
-on first use (skips the network if already present).
-
-```rust
-use koe_asr::wetype::WeTypeOfflineProvider;
-use koe_asr::{AsrConfig, AsrProvider};
-
-#[tokio::main]
-async fn main() -> Result<(), koe_asr::AsrError> {
-    let mut asr = WeTypeOfflineProvider::ensure_and_new(
-        "/path/to/model_dir",
-        "https://model.koe.li",            // host serving the two model files
-        |file, done, total| {
-            if let Some(t) = total {
-                eprintln!("{file}: {done}/{t} bytes");
-            }
-        },
-    )
-    .await?;
-
-    asr.connect(&AsrConfig::default()).await?;
-    // asr.send_audio(&pcm16le_mono_16k).await?;  // Interim results stream live
-    asr.finish_input().await?;                    // then a full-quality Final
-    // ... standard next_event loop ...
-    asr.close().await?;
-    Ok(())
-}
-```
-
-Requires the `wetype-offline` feature. Use `WeTypeOfflineProvider::new(dir)`
-directly if you manage the model files yourself.
-
-## Provider Trait
-
-All providers implement the `AsrProvider` trait, making them interchangeable:
-
-```rust
-#[async_trait]
-pub trait AsrProvider: Send {
-    /// Connect to the ASR service (or initialize local model)
-    async fn connect(&mut self, config: &AsrConfig) -> Result<()>;
-    /// Push a chunk of raw audio (PCM 16-bit LE, mono, 16kHz)
-    async fn send_audio(&mut self, frame: &[u8]) -> Result<()>;
-    /// Signal that no more audio will be sent
-    async fn finish_input(&mut self) -> Result<()>;
-    /// Wait for the next recognition event
-    async fn next_event(&mut self) -> Result<AsrEvent>;
-    /// Close the connection and release resources
-    async fn close(&mut self) -> Result<()>;
-}
-```
-
-You can write provider-agnostic code:
-
-```rust
-async fn transcribe(asr: &mut dyn AsrProvider, audio: &[u8]) -> Result<String, koe_asr::AsrError> {
-    asr.connect(&AsrConfig::default()).await?;
-    asr.send_audio(audio).await?;
-    asr.finish_input().await?;
-
-    let mut aggregator = TranscriptAggregator::new();
-    loop {
-        match asr.next_event().await? {
-            AsrEvent::Interim(t) => aggregator.update_interim(&t),
-            AsrEvent::Definite(t) => aggregator.update_definite(&t),
-            AsrEvent::Final(t) => { aggregator.update_final(&t); break; }
-            AsrEvent::Closed(_) => break,
-            _ => {}
-        }
-    }
-    asr.close().await?;
-    Ok(aggregator.best_text().to_string())
-}
-```
-
-## Events
-
-The `AsrEvent` enum represents all possible events during streaming recognition:
-
-| Event | Description |
-|---|---|
-| `Connected` | Connection established or local model loaded |
-| `Interim(String)` | Partial result — may change as more audio arrives |
-| `Definite(String)` | Confirmed sentence from two-pass recognition (higher accuracy) |
-| `Final(String)` | Final result for the session |
-| `Error(String)` | Server-side or provider error |
-| `Closed` | Connection closed or session ended |
-
-## Configuration
-
-`AsrConfig` controls the behavior of cloud providers:
-
-```rust
-let config = AsrConfig {
-    url: "wss://...".into(),              // WebSocket endpoint (provider-specific default)
-    app_key: "...".into(),                // App ID (Doubao) or unused (Qwen)
-    access_key: "...".into(),             // Access Token (Doubao) or API Key (Qwen)
-    resource_id: "...".into(),            // Resource ID (Doubao-specific)
-    sample_rate_hz: 16000,                // Audio sample rate in Hz
-    connect_timeout_ms: 3000,             // Connection timeout
-    final_wait_timeout_ms: 5000,          // Timeout for final result after finish
-    enable_ddc: true,                     // Disfluency removal / smoothing
-    enable_itn: true,                     // Inverse text normalization (e.g. "三百" → "300")
-    enable_punc: true,                    // Automatic punctuation
-    enable_nonstream: true,               // Two-pass recognition for higher accuracy
-    hotwords: vec!["Koe".into()],         // Boost specific terms
-    language: Some("zh".into()),          // Language code ("zh", "en", etc.)
-    custom_headers: HashMap::new(),       // Custom HTTP headers
-};
-```
-
-Local providers (`MlxProvider`, `AppleSpeechProvider`, `SherpaOnnxProvider`, `WeTypeOfflineProvider`) use their own config structs / constructors and ignore `AsrConfig`.
-
-## TranscriptAggregator
-
-A helper that merges the stream of interim/definite/final events into a single transcript:
-
-```rust
-let mut agg = TranscriptAggregator::new();
-
-// As events arrive:
-agg.update_interim("hel");
-agg.update_interim("hello wo");
-agg.update_definite("hello world");     // two-pass confirmed
-agg.update_final("hello world.");       // session complete
-
-// Get the best available text (priority: final > definite > interim)
-println!("{}", agg.best_text()); // "hello world."
-
-// Check state
-agg.has_final_result();  // true
-agg.has_any_text();      // true
-
-// Access interim revision history (useful for debugging)
-let history = agg.interim_history(10); // last 10 interim snapshots
-```
-
-## Error Handling
-
-All providers return `Result<T, AsrError>`:
-
-```rust
-pub enum AsrError {
-    Connection(String),  // WebSocket/network or model loading failure
-    Timeout,             // Timed out waiting for ASR result
-    Protocol(String),    // Binary protocol or server-side error
-}
-```
-
-## License
-
-MIT
+MIT License

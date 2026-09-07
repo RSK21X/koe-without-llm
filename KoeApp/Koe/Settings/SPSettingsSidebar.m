@@ -172,34 +172,25 @@
   // Grouped by what the user is configuring, in pipeline order: what turns
   // speech into text, how dictation is triggered and shown, then how the text
   // itself is shaped.
-  [self addHeaderTo:top text:@"Recognition"];
-  [self addItemTo:top identifier:@"asr" title:@"ASR" symbol:@"mic.fill"];
-  [self addItemTo:top identifier:@"llm" title:@"LLM" symbol:@"cpu"];
+  [self addHeaderTo:top text:@"识别"];
+  [self addItemTo:top identifier:@"asr" title:@"语音识别" symbol:@"mic.fill"];
 
-  [self addHeaderTo:top text:@"Input"];
+  [self addHeaderTo:top text:@"输入"];
   [self addItemTo:top
        identifier:@"hotkey"
-            title:@"Controls"
+            title:@"快捷键"
            symbol:@"slider.horizontal.3"];
   [self addItemTo:top
        identifier:@"overlay"
-            title:@"Overlay"
+            title:@"悬浮窗"
            symbol:@"captions.bubble"];
 
-  [self addHeaderTo:top text:@"Text"];
-  [self addItemTo:top identifier:@"dictionary" title:@"Dictionary" symbol:@"book"];
-  [self addItemTo:top
-       identifier:@"system_prompt"
-            title:@"Prompt"
-           symbol:@"text.bubble"];
-  [self addItemTo:top
-       identifier:@"templates"
-            title:@"Templates"
-           symbol:@"sparkles"];
+  [self addHeaderTo:top text:@"文本"];
+  [self addItemTo:top identifier:@"dictionary" title:@"词典" symbol:@"book"];
 
   [self addItemTo:bottom
        identifier:@"about"
-            title:@"About"
+            title:@"关于"
            symbol:@"info.circle"];
 }
 

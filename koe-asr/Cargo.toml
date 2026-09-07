@@ -1,6 +1,6 @@
 [package]
 name = "koe-asr"
-description = "Streaming ASR (Automatic Speech Recognition) library with multiple provider backends (Doubao, Qwen, Apple Speech, MLX Whisper, Sherpa-ONNX)"
+description = "Streaming ASR (Automatic Speech Recognition) library with online provider backends"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -26,21 +26,13 @@ rustls = { workspace = true, default-features = false, features = ["ring"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 bytes = "1"
-sherpa-onnx = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
 url.workspace = true
 uuid = { workspace = true, features = ["v4"] }
-ndarray = { version = "0.16", optional = true }
-rustfft = { version = "6", optional = true }
 
 [features]
 default = []
-mlx = []
-apple-speech = []
-sherpa-onnx = ["dep:sherpa-onnx"]
-# Offline on-device WeType voice ASR (embed_140m, pure-Rust; needs an embed140m.koepack model dir)
-wetype-offline = ["dep:ndarray", "dep:rustfft"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

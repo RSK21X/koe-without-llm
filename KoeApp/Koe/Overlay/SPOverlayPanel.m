@@ -154,11 +154,11 @@ static NSArray<SPDiffEntry *> *SPComputeCharDiff(NSString *oldText, NSString *ne
 }
 
 static NSColor *SPOverlaySurfaceTintColor(void) {
-    return [NSColor colorWithSRGBRed:0.07 green:0.065 blue:0.03 alpha:0.34];
+    return [NSColor colorWithWhite:0.035 alpha:0.94];
 }
 
 static NSColor *SPOverlayShadowColor(void) {
-    return [NSColor colorWithSRGBRed:0.04 green:0.035 blue:0.015 alpha:1.0];
+    return [NSColor colorWithWhite:0.0 alpha:1.0];
 }
 
 static CGFloat SPOverlayClampTextFontSize(CGFloat fontSize) {
@@ -914,7 +914,7 @@ typedef NS_ENUM(NSInteger, SPOverlayMode) {
 #pragma mark - Cross (error)
 
 - (void)drawCrossAtX:(CGFloat)centerX centerY:(CGFloat)centerY {
-    NSColor *color = self.accentColor ?: [NSColor redColor];
+    NSColor *color = self.accentColor ?: [NSColor whiteColor];
     CGFloat arm = 5.0;
 
     NSBezierPath *path = [NSBezierPath bezierPath];
@@ -1412,32 +1412,32 @@ typedef NS_ENUM(NSInteger, SPOverlayMode) {
     if ([state hasPrefix:@"recording"]) {
         self.sessionMaxWidth = 0;
         self.sessionMaxHeight = 0;
-        text   = @"Listening…";
-        accent = [NSColor colorWithRed:1.0 green:0.32 blue:0.32 alpha:1.0];
+        text   = @"正在聆听…";
+        accent = [NSColor colorWithWhite:1.0 alpha:1.0];
         mode   = SPOverlayModeWaveform;
     } else if ([state hasPrefix:@"connecting_asr"]) {
-        text   = @"Connecting…";
-        accent = [NSColor colorWithRed:1.0 green:0.78 blue:0.28 alpha:1.0];
+        text   = @"正在连接…";
+        accent = [NSColor colorWithWhite:0.82 alpha:1.0];
         mode   = SPOverlayModeProcessing;
     } else if ([state hasPrefix:@"finalizing_asr"]) {
-        text   = @"Recognizing…";
-        accent = [NSColor colorWithRed:0.35 green:0.78 blue:1.0 alpha:1.0];
+        text   = @"正在识别…";
+        accent = [NSColor colorWithWhite:0.94 alpha:1.0];
         mode   = SPOverlayModeProcessing;
     } else if ([state isEqualToString:@"correcting"]) {
-        text   = @"Thinking…";
-        accent = [NSColor colorWithRed:0.55 green:0.6 blue:1.0 alpha:1.0];
+        text   = @"正在处理…";
+        accent = [NSColor colorWithWhite:0.72 alpha:1.0];
         mode   = SPOverlayModeProcessing;
     } else if ([state hasPrefix:@"preparing_paste"] || [state isEqualToString:@"pasting"]) {
-        text   = @"Pasting…";
-        accent = [NSColor colorWithRed:0.3 green:0.85 blue:0.45 alpha:1.0];
+        text   = @"正在粘贴…";
+        accent = [NSColor colorWithWhite:1.0 alpha:1.0];
         mode   = SPOverlayModeSuccess;
     } else if ([state isEqualToString:@"error"] || [state isEqualToString:@"failed"]) {
-        text   = @"Error";
-        accent = [NSColor colorWithRed:1.0 green:0.32 blue:0.32 alpha:1.0];
+        text   = @"发生错误";
+        accent = [NSColor colorWithWhite:0.95 alpha:1.0];
         mode   = SPOverlayModeError;
     } else {
-        text   = @"Working…";
-        accent = [NSColor colorWithRed:0.35 green:0.78 blue:1.0 alpha:1.0];
+        text   = @"处理中…";
+        accent = [NSColor colorWithWhite:0.88 alpha:1.0];
         mode   = SPOverlayModeProcessing;
     }
 
@@ -1582,18 +1582,11 @@ static NSArray<SPDiffEntry *> *SPMergeReplacements(NSArray<SPDiffEntry *> *diff)
 - (NSMutableAttributedString *)buildDiffAttributedString:(NSArray<SPDiffEntry *> *)diff
                                                baseAttrs:(NSDictionary *)baseAttrs
                                                 progress:(CGFloat)progress {
-    // Deleted text: muted soft red, fading to transparent
-    NSColor *deleteColor = [NSColor colorWithRed:1.0 green:0.62 blue:0.58 alpha:0.55 * (1.0 - progress)];
-    // Inserted text: soft blue-lavender accent, transitioning to normal white
-    NSColor *insertColor = [NSColor colorWithRed:0.68 + 0.32 * progress
-                                           green:0.78 + 0.22 * progress
-                                            blue:1.0 - 0.08 * progress
-                                           alpha:0.92];
-    // Replaced text (typo/word swap): slightly warmer accent
-    NSColor *replaceColor = [NSColor colorWithRed:0.72 + 0.28 * progress
-                                            green:0.82 + 0.18 * progress
-                                             blue:0.98 - 0.06 * progress
-                                            alpha:0.92];
+    // Diff animation stays strictly monochrome so the overlay never flashes
+    // red/blue/green while the transcript is being replaced.
+    NSColor *deleteColor = [NSColor colorWithWhite:0.62 alpha:0.55 * (1.0 - progress)];
+    NSColor *insertColor = [NSColor colorWithWhite:0.70 + 0.30 * progress alpha:0.92];
+    NSColor *replaceColor = [NSColor colorWithWhite:0.78 + 0.22 * progress alpha:0.92];
 
     NSMutableAttributedString *str = [[NSMutableAttributedString alloc] init];
     for (SPDiffEntry *entry in diff) {

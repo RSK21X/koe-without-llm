@@ -3,8 +3,6 @@ use std::fmt;
 #[derive(Debug)]
 pub enum KoeError {
     Config(String),
-    LlmFailed(String),
-    LlmTimeout,
     SessionInvalidState { from: String, action: String },
     PermissionDenied(String),
     PasteFailed(String),
@@ -16,8 +14,6 @@ impl fmt::Display for KoeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             KoeError::Config(msg) => write!(f, "config error: {msg}"),
-            KoeError::LlmFailed(msg) => write!(f, "LLM correction failed: {msg}"),
-            KoeError::LlmTimeout => write!(f, "LLM correction timed out"),
             KoeError::SessionInvalidState { from, action } => {
                 write!(f, "invalid state transition: {action} from {from}")
             }

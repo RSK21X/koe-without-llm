@@ -1,12 +1,8 @@
 mod benchmark;
-mod dict;
 mod text;
 
-use std::sync::Arc;
-
 use clap::{Parser, Subcommand};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use koe_core::{asr_factory, model_manager};
+use koe_core::asr_factory;
 
 #[derive(Parser)]
 #[command(name = "koe", about = "Koe voice input tool CLI")]
@@ -47,45 +43,15 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Manage local ASR models
-    Model {
-        #[command(subcommand)]
-        action: ModelCommands,
-    },
-    /// Dictionary management and suggestions
+    /// Dictionary management
     Dict {
         #[command(subcommand)]
         action: DictCommands,
-    },
-    /// Manifest management
-    Manifest {
-        #[command(subcommand)]
-        action: ManifestCommands,
     },
 }
 
 #[derive(Subcommand)]
 enum DictCommands {
-    /// Suggest dictionary entries mined from voice-input history.
-    ///
-    /// Compares each session's raw ASR transcript against its LLM-corrected
-    /// text and surfaces recurring corrections — likely proper nouns and
-    /// technical terms a dictionary entry would fix. Suggestions are never
-    /// added automatically; confirm with 'koe dict add <term>'.
-    Suggest {
-        /// Minimum number of sessions a correction must appear in
-        #[arg(long, default_value_t = 2)]
-        min_count: usize,
-        /// Maximum suggestions to show
-        #[arg(long, default_value_t = 20)]
-        limit: usize,
-        /// Path to history.db (default: ~/.koe/history.db)
-        #[arg(long)]
-        db: Option<String>,
-        /// Emit JSON instead of a table
-        #[arg(long)]
-        json: bool,
-    },
     /// Add terms to the dictionary (after your confirmation)
     Add {
         /// Terms to append to ~/.koe/dictionary.txt
@@ -94,53 +60,11 @@ enum DictCommands {
     },
 }
 
-#[derive(Subcommand)]
-enum ManifestCommands {
-    /// Generate manifest from a HuggingFace repo
-    Generate {
-        /// HuggingFace repo id (e.g. mlx-community/Qwen3-ASR-0.6B-4bit)
-        repo: String,
-        /// Provider name (e.g. mlx, sherpa-onnx)
-        #[arg(long)]
-        provider: String,
-        /// Model description
-        #[arg(long)]
-        description: String,
-        /// Output path (default: ~/.koe/models/<provider>/<repo-name>/.koe-manifest.json)
-        #[arg(long, short)]
-        output: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
-enum ModelCommands {
-    /// List all discovered models and their status
-    List,
-    /// Show model status for a specific path
-    Status {
-        /// Model path (relative to ~/.koe/models/ or absolute)
-        model: String,
-        /// Verification mode: normal (default), cache-only, force
-        #[arg(long, default_value = "normal")]
-        verify_mode: String,
-    },
-    /// Download model files
-    Pull {
-        /// Model path (relative to ~/.koe/models/ or absolute)
-        model: String,
-    },
-    /// Remove downloaded model files (keeps manifest)
-    Remove {
-        /// Model path (relative to ~/.koe/models/ or absolute)
-        model: String,
-    },
-}
-
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
 
-    // Ensure ~/.koe/ and default manifests exist
+    // Ensure ~/.koe/ and the online-provider defaults exist
     let _ = koe_core::config::ensure_defaults();
 
     let result = match cli.command {
@@ -155,28 +79,8 @@ async fn main() {
             providers,
             json,
         } => run_benchmark(&corpus_dir, providers.as_deref(), json).await,
-        Commands::Model { action } => match action {
-            ModelCommands::List => list(),
-            ModelCommands::Status { model, verify_mode } => status(&model, &verify_mode),
-            ModelCommands::Pull { model } => pull(&model).await,
-            ModelCommands::Remove { model } => remove(&model),
-        },
         Commands::Dict { action } => match action {
-            DictCommands::Suggest {
-                min_count,
-                limit,
-                db,
-                json,
-            } => dict_suggest(min_count, limit, db.as_deref(), json),
             DictCommands::Add { terms } => dict_add(&terms),
-        },
-        Commands::Manifest { action } => match action {
-            ManifestCommands::Generate {
-                repo,
-                provider,
-                description,
-                output,
-            } => manifest_generate(&repo, &provider, &description, output.as_deref()).await,
         },
     };
 
@@ -186,183 +90,14 @@ async fn main() {
     }
 }
 
-fn list() -> Result<(), String> {
-    let models = model_manager::scan_models();
-
-    if models.is_empty() {
-        println!(
-            "No models found in {}",
-            model_manager::models_dir().display()
-        );
-        return Ok(());
-    }
-
-    for model in &models {
-        let status = model_manager::model_status(&model.path, model_manager::VerifyMode::CacheOnly);
-        let tag = match status {
-            model_manager::ModelStatus::Installed => "installed",
-            model_manager::ModelStatus::Incomplete => "incomplete",
-            model_manager::ModelStatus::NotInstalled => "not installed",
-        };
-
-        let display_path = model
-            .path
-            .strip_prefix(model_manager::models_dir())
-            .unwrap_or(&model.path);
-
-        println!(
-            "{:<40} [{}] {}",
-            display_path.display(),
-            tag,
-            model.manifest.description
-        );
-    }
-
-    Ok(())
-}
-
-fn status(model: &str, verify_mode_str: &str) -> Result<(), String> {
-    let model_dir = koe_core::config::resolve_model_dir(model);
-
-    if !model_dir.exists() {
-        return Err(format!(
-            "model directory not found: {}",
-            model_dir.display()
-        ));
-    }
-
-    let mode = match verify_mode_str {
-        "cache-only" => model_manager::VerifyMode::CacheOnly,
-        "force" => model_manager::VerifyMode::ForceVerify,
-        _ => model_manager::VerifyMode::Normal,
-    };
-
-    println!("Verifying {model}...");
-    let status = model_manager::model_status(&model_dir, mode);
-    match status {
-        model_manager::ModelStatus::Installed => {
-            println!("{model} — installed (verified)");
-            println!("Path: {}", model_dir.display());
-        }
-        model_manager::ModelStatus::Incomplete => {
-            println!("{model} — incomplete (files missing, wrong size, or sha256 mismatch)");
-        }
-        model_manager::ModelStatus::NotInstalled => {
-            println!("{model} — not installed (manifest only, no data files)");
-        }
-    }
-
-    Ok(())
-}
-
-fn remove(model: &str) -> Result<(), String> {
-    let model_dir = koe_core::config::resolve_model_dir(model);
-
-    if !model_dir.exists() {
-        return Err(format!(
-            "model directory not found: {}",
-            model_dir.display()
-        ));
-    }
-
-    let removed = model_manager::remove_model_files(&model_dir).map_err(|e| format!("{e}"))?;
-    println!("{model}: removed {removed} file(s), manifest kept");
-    Ok(())
-}
-
-async fn pull(model: &str) -> Result<(), String> {
-    let model_dir = koe_core::config::resolve_model_dir(model);
-
-    if !model_dir.exists() {
-        return Err(format!(
-            "model directory not found: {}",
-            model_dir.display()
-        ));
-    }
-
-    let multi = Arc::new(MultiProgress::new());
-    let bars: Arc<std::sync::Mutex<Vec<Option<ProgressBar>>>> =
-        Arc::new(std::sync::Mutex::new(Vec::new()));
-
-    let style = ProgressStyle::with_template(
-        "{prefix:<25!} {msg:<9} [{bar:20}] {bytes:>10}/{total_bytes:>10}",
-    )
-    .unwrap()
-    .progress_chars("█▓░");
-
-    let style_done =
-        ProgressStyle::with_template("{prefix:<25!} {msg:<9} {total_bytes:>44}").unwrap();
-
-    let multi_clone = multi.clone();
-    let bars_clone = bars.clone();
-    let style_c = style.clone();
-    let style_done_c = style_done.clone();
-
-    let cancel = model_manager::CancellationToken::new();
-    model_manager::download_model(
-        &model_dir,
-        move |progress| {
-            let mut bars_guard = bars_clone.lock().unwrap();
-
-            // Ensure vec is large enough
-            while bars_guard.len() <= progress.file_index {
-                bars_guard.push(None);
-            }
-
-            let pb = bars_guard[progress.file_index].get_or_insert_with(|| {
-                let pb = multi_clone.add(ProgressBar::new(progress.bytes_total));
-                pb.set_style(style_c.clone());
-                pb.set_prefix(progress.filename.clone());
-                pb
-            });
-
-            if progress.already_exists {
-                pb.set_length(progress.bytes_total);
-                pb.set_position(progress.bytes_total);
-                pb.set_style(style_done_c.clone());
-                pb.set_message("exists");
-                pb.finish();
-            } else if progress.bytes_downloaded >= progress.bytes_total && progress.bytes_total > 0
-            {
-                pb.set_position(progress.bytes_total);
-                pb.set_style(style_done_c.clone());
-                pb.set_message("done");
-                pb.finish();
-            } else {
-                if pb.length().unwrap_or(0) == 0 && progress.bytes_total > 0 {
-                    pb.set_length(progress.bytes_total);
-                }
-                pb.set_message("pulling");
-                pb.set_position(progress.bytes_downloaded);
-            }
-        },
-        cancel,
-    )
-    .await
-    .map_err(|e| format!("{e}"))?;
-
-    // Verify after download
-    eprint!("\nVerifying...");
-    let status = model_manager::model_status(&model_dir, model_manager::VerifyMode::ForceVerify);
-    match status {
-        model_manager::ModelStatus::Installed => {
-            eprintln!(" ok");
-            println!("{model}: pull complete");
-            println!("Path: {}", model_dir.display());
-        }
-        _ => {
-            eprintln!(" failed");
-            return Err(format!("{model}: verification failed after download"));
-        }
-    }
-    Ok(())
-}
-
 // ─── Transcribe ─────────────────────────────────────────────────────
 
 /// Resolve a provider-name argument against what this build supports.
 /// `None` falls back to the provider configured in ~/.koe/config.yaml.
-fn resolve_provider(cfg: &koe_core::config::Config, requested: Option<&str>) -> Result<String, String> {
+fn resolve_provider(
+    cfg: &koe_core::config::Config,
+    requested: Option<&str>,
+) -> Result<String, String> {
     let name = requested.unwrap_or(&cfg.asr.provider).to_string();
     let supported = asr_factory::supported_providers();
     if supported.contains(&name.as_str()) {
@@ -476,75 +211,6 @@ async fn transcribe(
 }
 
 // ─── Dictionary ─────────────────────────────────────────────────────
-
-fn dict_suggest(min_count: usize, limit: usize, db: Option<&str>, json: bool) -> Result<(), String> {
-    let db_path = match db {
-        Some(p) => std::path::PathBuf::from(p),
-        None => koe_core::config::config_dir().join("history.db"),
-    };
-
-    let pairs = dict::load_history_pairs(&db_path)?;
-    if pairs.is_empty() {
-        let analyzable = dict::count_analyzable(&db_path);
-        if analyzable == 0 {
-            eprintln!(
-                "No analyzable sessions yet. Raw ASR text is recorded from this \
-                 version onward — dictate for a while, then run this again."
-            );
-        } else {
-            eprintln!(
-                "No LLM-corrected sessions found ({analyzable} sessions have raw text). \
-                 Enable LLM correction to collect correction pairs."
-            );
-        }
-        return Ok(());
-    }
-
-    let cfg = koe_core::config::load_config().map_err(|e| format!("load config: {e}"))?;
-    let dict_path = koe_core::config::resolve_dictionary_path(&cfg);
-    let existing = koe_core::dictionary::load_dictionary(&dict_path)
-        .map_err(|e| format!("load dictionary: {e}"))?;
-
-    let all: Vec<dict::Replacement> = pairs
-        .iter()
-        .flat_map(|(asr, corrected)| dict::replacements(asr, corrected))
-        .collect();
-    let mut suggestions = dict::aggregate(all, &existing, min_count);
-    let total = suggestions.len();
-    suggestions.truncate(limit);
-
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&suggestions).map_err(|e| format!("json: {e}"))?
-        );
-        return Ok(());
-    }
-
-    if suggestions.is_empty() {
-        eprintln!(
-            "No recurring corrections found across {} session(s). \
-             Lower the threshold with --min-count 1 to see one-off corrections.",
-            pairs.len()
-        );
-        return Ok(());
-    }
-
-    println!(
-        "Dictionary suggestions from {} corrected session(s):\n",
-        pairs.len()
-    );
-    for s in &suggestions {
-        println!("  {}  ({}x)", s.term, s.count);
-        println!("    heard as: {}", s.asr_forms.join(", "));
-        println!("    example:  {}\n", s.example);
-    }
-    if total > suggestions.len() {
-        println!("  … and {} more (raise --limit)\n", total - suggestions.len());
-    }
-    println!("Add with: koe dict add <term> …  (nothing is added automatically)");
-    Ok(())
-}
 
 fn dict_add(terms: &[String]) -> Result<(), String> {
     let cfg = koe_core::config::load_config().map_err(|e| format!("load config: {e}"))?;
@@ -696,90 +362,4 @@ fn decode_to_pcm(file: &str) -> Result<Vec<u8>, String> {
     }
 
     Ok(output.stdout)
-}
-
-// ─── Manifest Generate ──────────────────────────────────────────────
-
-#[derive(serde::Deserialize)]
-struct HfTreeEntry {
-    #[serde(rename = "type")]
-    entry_type: String,
-    path: String,
-    size: Option<u64>,
-    lfs: Option<HfLfsInfo>,
-}
-
-#[derive(serde::Deserialize)]
-struct HfLfsInfo {
-    oid: String,
-    size: u64,
-}
-
-async fn manifest_generate(
-    repo: &str,
-    provider: &str,
-    description: &str,
-    output: Option<&str>,
-) -> Result<(), String> {
-    eprintln!("Querying https://huggingface.co/api/models/{repo}/tree/main ...");
-
-    let client = reqwest::Client::builder()
-        .user_agent("koe/1.0")
-        .build()
-        .map_err(|e| format!("http client: {e}"))?;
-
-    let url = format!("https://huggingface.co/api/models/{repo}/tree/main");
-    let entries: Vec<HfTreeEntry> = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("fetch: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("fetch: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("parse: {e}"))?;
-
-    let files: Vec<serde_json::Value> = entries
-        .iter()
-        .filter(|e| e.entry_type == "file")
-        .map(|e| {
-            let size = e.lfs.as_ref().map(|l| l.size).or(e.size).unwrap_or(0);
-            let sha256 = e.lfs.as_ref().map(|l| l.oid.as_str()).unwrap_or("");
-            let url = format!("https://huggingface.co/{}/resolve/main/{}", repo, e.path);
-            serde_json::json!({
-                "name": e.path,
-                "size": size,
-                "sha256": sha256,
-                "url": url,
-            })
-        })
-        .collect();
-
-    let manifest = serde_json::json!({
-        "provider": provider,
-        "description": description,
-        "repo": repo,
-        "files": files,
-    });
-
-    let json = serde_json::to_string_pretty(&manifest).map_err(|e| format!("json: {e}"))?;
-
-    let output_path = match output {
-        Some(path) => std::path::PathBuf::from(path),
-        None => {
-            // ~/.koe/models/<provider>/<repo-last-segment>/.koe-manifest.json
-            let dir_name = repo.rsplit('/').next().unwrap_or(repo);
-            let dir = model_manager::models_dir().join(provider).join(dir_name);
-            std::fs::create_dir_all(&dir).map_err(|e| format!("create dir: {e}"))?;
-            dir.join(".koe-manifest.json")
-        }
-    };
-
-    std::fs::write(&output_path, &json).map_err(|e| format!("write: {e}"))?;
-
-    eprintln!("Generated manifest with {} files", files.len());
-    eprintln!("Written to: {}", output_path.display());
-
-    Ok(())
 }

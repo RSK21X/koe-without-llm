@@ -226,86 +226,33 @@ static void bridge_on_rewrite_text_ready(uint64_t token, const char *text) {
 // ─── Model Management ──────────────────────────────────────────────
 
 - (NSArray<NSString *> *)supportedLocalProviders {
-    char *json = sp_core_supported_local_providers();
-    if (!json) return @[];
-    NSString *jsonStr = [NSString stringWithUTF8String:json];
-    sp_core_free_string(json);
-    NSData *data = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
-    if (!data) return @[];
-    NSArray *result = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    return [result isKindOfClass:[NSArray class]] ? result : @[];
+    // Local ASR models are intentionally removed from this build.
+    return @[];
 }
 
 - (NSArray<NSString *> *)supportedLlmProviders {
-    char *json = sp_core_supported_llm_providers();
-    if (!json) return @[];
-    NSString *jsonStr = [NSString stringWithUTF8String:json];
-    sp_core_free_string(json);
-    NSData *data = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
-    if (!data) return @[];
-    NSArray *result = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    return [result isKindOfClass:[NSArray class]] ? result : @[];
+    // LLM correction is intentionally removed from this build.
+    return @[];
 }
 
 - (NSDictionary *)llmRemoteModelsForProfile:(NSDictionary *)profile {
-    NSData *profileData = [NSJSONSerialization dataWithJSONObject:profile ?: @{}
-                                                          options:0
-                                                            error:nil];
-    NSString *profileJson = profileData
-                                ? [[NSString alloc] initWithData:profileData
-                                                       encoding:NSUTF8StringEncoding]
-                                : nil;
-    char *json = sp_llm_list_models_for_profile_json((profileJson ?: @"{}").UTF8String);
-    if (!json) {
-        return @{
-            @"success": @NO,
-            @"models": @[],
-            @"message": @"No response from core",
-        };
-    }
-
-    NSString *jsonStr = [NSString stringWithUTF8String:json] ?: @"";
-    sp_core_free_string(json);
-
-    NSData *data = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
-    if (!data) {
-        return @{
-            @"success": @NO,
-            @"models": @[],
-            @"message": @"Invalid model list response encoding",
-        };
-    }
-
-    NSDictionary *result = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    if (![result isKindOfClass:[NSDictionary class]]) {
-        return @{
-            @"success": @NO,
-            @"models": @[],
-            @"message": @"Invalid model list response payload",
-        };
-    }
-    return result;
+    (void)profile;
+    return @{
+        @"success": @NO,
+        @"models": @[],
+        @"message": @"本版本不包含 LLM",
+    };
 }
 
 - (NSArray<NSDictionary *> *)scanModels {
-    char *json = sp_core_scan_models_json();
-    if (!json) return @[];
-
-    NSString *jsonStr = [NSString stringWithUTF8String:json];
-    sp_core_free_string(json);
-
-    NSData *data = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
-    if (!data) return @[];
-
-    NSError *error = nil;
-    NSArray *result = [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
-    if (error || ![result isKindOfClass:[NSArray class]]) return @[];
-
-    return result;
+    // Local ASR models are intentionally removed from this build.
+    return @[];
 }
 
 - (NSInteger)modelStatus:(NSString *)modelPath mode:(SPModelVerifyMode)mode {
-    return sp_model_status(modelPath.UTF8String, (int32_t)mode);
+    (void)modelPath;
+    (void)mode;
+    return 0;
 }
 
 static void download_progress_cb(void *ctx, uint32_t file_index, uint32_t file_count,
@@ -339,60 +286,39 @@ static void download_status_cb(void *ctx, int32_t status, const char *message) {
 - (void)downloadModel:(NSString *)modelPath
              progress:(void (^)(NSUInteger, NSUInteger, uint64_t, uint64_t, NSString *))progressBlock
            completion:(void (^)(BOOL, NSString *))completionBlock {
-    _KoeDownloadContext *dctx = [[_KoeDownloadContext alloc] init];
-    dctx.progressBlock = progressBlock;
-    dctx.completionBlock = completionBlock;
-
-    // Retain for C callback lifetime — transferred back in download_status_cb
-    void *ctx = (__bridge_retained void *)dctx;
-
-    int32_t result = sp_core_download_model(
-        modelPath.UTF8String,
-        download_progress_cb,
-        download_status_cb,
-        ctx
-    );
-
-    if (result != 0) {
-        // Transfer back so ARC releases
-        (void)(__bridge_transfer _KoeDownloadContext *)ctx;
-        NSString *msg = (result == -1) ? @"Already downloading" : @"Failed to start download";
+    (void)modelPath;
+    (void)progressBlock;
+    if (completionBlock) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            completionBlock(NO, msg);
+            completionBlock(NO, @"本版本不包含本地模型");
         });
     }
 }
 
 - (void)cancelDownload:(NSString *)modelPath {
-    sp_core_cancel_download(modelPath.UTF8String);
+    (void)modelPath;
 }
 
 - (NSInteger)removeModelFiles:(NSString *)modelPath {
-    return sp_core_remove_model_files(modelPath.UTF8String);
+    (void)modelPath;
+    return 0;
 }
 
 // ─── Rewrite / Prompt Templates ───────────────────────────────────
 
 - (NSArray<NSDictionary *> *)promptTemplates {
-    char *json = sp_core_get_prompt_templates_json();
-    if (!json) return @[];
-    NSString *jsonStr = [NSString stringWithUTF8String:json];
-    sp_core_free_string(json);
-    NSData *data = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
-    if (!data) return @[];
-    NSArray *arr = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    return arr ?: @[];
+    return @[];
 }
 
 - (BOOL)setPromptTemplates:(NSArray<NSDictionary *> *)templates {
-    NSData *data = [NSJSONSerialization dataWithJSONObject:templates options:0 error:nil];
-    if (!data) return NO;
-    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    return sp_core_set_prompt_templates_json(json.UTF8String) == 0;
+    (void)templates;
+    return NO;
 }
 
 - (BOOL)rewriteWithTemplateIndex:(NSInteger)index asrText:(NSString *)text {
-    return sp_core_rewrite_with_template((int32_t)index, text.UTF8String) == 0;
+    (void)index;
+    (void)text;
+    return NO;
 }
 
 @end

@@ -4,76 +4,37 @@ pub mod config;
 pub mod dictionary;
 pub mod errors;
 pub mod ffi;
-pub mod llm;
-pub mod model_manager;
-pub mod prompt;
 pub mod session;
 pub mod telemetry;
 
 use crate::config::Config;
 use crate::ffi::{
     cstr_to_str, invoke_asr_final_text, invoke_final_text_ready, invoke_interim_text,
-    invoke_rewrite_text_ready, invoke_session_error, invoke_session_ready,
-    invoke_session_result_meta, invoke_session_warning, invoke_state_changed, SPCallbacks,
-    SPClipboardConfig, SPFeedbackConfig, SPHotkeyConfig, SPSessionContext, SPSessionMode,
+    invoke_session_error, invoke_session_ready, invoke_session_result_meta, invoke_state_changed,
+    SPCallbacks, SPClipboardConfig, SPFeedbackConfig, SPHotkeyConfig, SPSessionContext,
+    SPSessionMode,
 };
-#[cfg(feature = "mlx")]
-use crate::llm::mlx::MlxLlmProvider;
-use crate::llm::openai_compatible::{
-    build_http_client, list_models as llm_list_models,
-    list_models_for_profile as llm_list_models_for_profile, OpenAiCompatibleProvider,
-    LLM_HTTP_POOL_IDLE_TIMEOUT,
-};
-use crate::llm::{CorrectionRequest, LlmProvider};
 use crate::session::{Session, SessionState};
 use koe_asr::{AsrConfig, AsrEvent, AsrProvider, TranscriptAggregator};
-use reqwest::Client;
 
-use std::collections::HashSet;
-use std::ffi::c_char;
+use std::ffi::{c_char, CString};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 use tokio::runtime::Runtime;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
-
-const LLM_WARMUP_SAFETY_MARGIN: Duration = Duration::from_secs(20);
-const LLM_WARMUP_TTL: Duration =
-    match LLM_HTTP_POOL_IDLE_TIMEOUT.checked_sub(LLM_WARMUP_SAFETY_MARGIN) {
-        Some(duration) => duration,
-        None => Duration::from_secs(0),
-    };
-
-#[derive(Default)]
-struct LlmWarmupState {
-    in_flight: bool,
-    last_touched: Option<Instant>,
-}
 
 /// Global core state
 struct Core {
     runtime: Runtime,
     audio_tx: Option<mpsc::Sender<Vec<u8>>>,
-    accept_asr_tx: Option<watch::Sender<bool>>,
     session: Arc<Mutex<Option<Session>>>,
     cancelled: Arc<AtomicBool>,
     config: Config,
     dictionary: Vec<String>,
-    system_prompt: String,
-    user_prompt_template: String,
-    llm_http_client: Client,
-    llm_warmup_state: Arc<Mutex<LlmWarmupState>>,
-    /// Session token from the most recent sp_core_session_begin call.
-    /// Used by sp_core_rewrite_with_template to route callbacks.
-    current_session_token: u64,
 }
 
 static CORE: Mutex<Option<Core>> = Mutex::new(None);
-
-fn llm_http_client_needs_reload(current: &Config, next: &Config) -> bool {
-    current.llm.timeout_ms != next.llm.timeout_ms
-}
 
 // ─── FFI Entry Points ───────────────────────────────────────────────
 
@@ -115,11 +76,6 @@ pub unsafe extern "C" fn sp_core_create(config_path: *const c_char) -> i32 {
         }
     };
 
-    // Load prompts
-    let system_prompt = prompt::load_system_prompt(&config::resolve_system_prompt_path(&cfg));
-    let user_prompt_template =
-        prompt::load_user_prompt_template(&config::resolve_user_prompt_path(&cfg));
-
     let runtime = match Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -127,27 +83,13 @@ pub unsafe extern "C" fn sp_core_create(config_path: *const c_char) -> i32 {
             return -1;
         }
     };
-    let llm_http_client = match build_http_client(cfg.llm.timeout_ms) {
-        Ok(client) => client,
-        Err(e) => {
-            log::error!("failed to create LLM HTTP client: {e}");
-            return -1;
-        }
-    };
-
     let core = Core {
         runtime,
         audio_tx: None,
-        accept_asr_tx: None,
         session: Arc::new(Mutex::new(None)),
         cancelled: Arc::new(AtomicBool::new(false)),
         config: cfg,
         dictionary,
-        system_prompt,
-        user_prompt_template,
-        llm_http_client,
-        llm_warmup_state: Arc::new(Mutex::new(LlmWarmupState::default())),
-        current_session_token: 0,
     };
 
     let mut global = CORE.lock().unwrap();
@@ -169,7 +111,6 @@ pub extern "C" fn sp_core_destroy() {
         // channels so a still-polled task exits via its normal close() path.
         core.cancelled.store(true, Ordering::SeqCst);
         core.audio_tx = None;
-        core.accept_asr_tx = None;
 
         let Core { runtime, .. } = core;
         // Bounded synchronous shutdown instead of an abrupt Drop: worker
@@ -211,28 +152,11 @@ pub extern "C" fn sp_core_reload_config() -> i32 {
         }
     };
 
-    let system_prompt = prompt::load_system_prompt(&config::resolve_system_prompt_path(&cfg));
-    let user_prompt_template =
-        prompt::load_user_prompt_template(&config::resolve_user_prompt_path(&cfg));
-
     let mut global = CORE.lock().unwrap();
     if let Some(ref mut core) = *global {
-        if llm_http_client_needs_reload(&core.config, &cfg) {
-            let llm_http_client = match build_http_client(cfg.llm.timeout_ms) {
-                Ok(client) => client,
-                Err(e) => {
-                    log::error!("reload HTTP client failed: {e}");
-                    return -1;
-                }
-            };
-            core.llm_http_client = llm_http_client;
-            log::info!("LLM HTTP client reloaded after timeout_ms change");
-        }
         core.config = cfg;
         core.dictionary = dictionary;
-        core.system_prompt = system_prompt;
-        core.user_prompt_template = user_prompt_template;
-        log::info!("config, dictionary, prompts, and HTTP client reloaded as needed");
+        log::info!("config and dictionary reloaded");
     }
 
     0
@@ -259,27 +183,12 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
         }
     };
 
-    // Hot-reload: re-read config, dictionary, and prompts at session start
+    // Hot-reload: re-read config and dictionary at session start
     // Files are tiny so overhead is negligible — no need to manually Reload Config
     if let Ok(new_cfg) = config::load_config() {
         let dict_path = config::resolve_dictionary_path(&new_cfg);
         if let Ok(d) = dictionary::load_dictionary(&dict_path) {
             core.dictionary = d;
-        }
-        core.system_prompt =
-            prompt::load_system_prompt(&config::resolve_system_prompt_path(&new_cfg));
-        core.user_prompt_template =
-            prompt::load_user_prompt_template(&config::resolve_user_prompt_path(&new_cfg));
-        if llm_http_client_needs_reload(&core.config, &new_cfg) {
-            match build_http_client(new_cfg.llm.timeout_ms) {
-                Ok(client) => {
-                    core.llm_http_client = client;
-                    log::info!("LLM HTTP client reloaded at session start after timeout_ms change");
-                }
-                Err(e) => {
-                    log::warn!("failed to reload LLM HTTP client at session start: {e}");
-                }
-            }
         }
         core.config = new_cfg;
     }
@@ -288,7 +197,6 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
     let session = Session::new(context.mode, bundle_id, context.frontmost_pid);
     let session_id = session.id.clone();
     let session_token = context.session_token;
-    core.current_session_token = session_token;
     let mode = context.mode;
 
     // Abort any still-running old session: signal its cancelled flag and close
@@ -296,7 +204,6 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
     // cancellation; its cleanup_session writes to the OLD Arc, not the new one.
     core.cancelled.store(true, Ordering::SeqCst);
     core.audio_tx = None;
-    core.accept_asr_tx = None;
 
     // Create fresh per-session Arcs so old and new tasks are fully isolated
     core.cancelled = Arc::new(AtomicBool::new(false));
@@ -305,8 +212,6 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
     // Audio channel for new session
     let (audio_tx, audio_rx) = mpsc::channel::<Vec<u8>>(1024);
     core.audio_tx = Some(audio_tx);
-    let (accept_asr_tx, accept_asr_rx) = watch::channel(false);
-    core.accept_asr_tx = Some(accept_asr_tx);
 
     let cancelled = core.cancelled.clone();
     let session_arc = core.session.clone();
@@ -319,29 +224,11 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
     let cfg = &core.config;
     let asr_provider_name = cfg.asr.provider.clone();
 
-    // Build the provider outside the async task so that local providers
-    // (e.g. mlx) receive their typed config via the constructor, while cloud
-    // providers continue to receive config via connect(&AsrConfig). Provider
-    // construction lives in asr_factory so koe-cli can reuse it. Ownership
-    // moves into the async closure below; the provider is dropped when
-    // run_session returns — created exactly once per session.
+    // Build the online provider outside the async task so construction is
+    // shared with koe-cli and happens exactly once per session.
     let (asr_config, asr): (AsrConfig, Box<dyn AsrProvider>) =
         asr_factory::create_asr_provider(cfg, &asr_provider_name, &core.dictionary);
-    let llm_config = cfg.llm.clone();
-    let llm_http_client = core.llm_http_client.clone();
-    let llm_warmup_state = core.llm_warmup_state.clone();
-    let dictionary = core.dictionary.clone();
-    let dictionary_max_candidates = cfg.llm.dictionary_max_candidates;
-    let system_prompt = core.system_prompt.clone();
-    let user_prompt_template = core.user_prompt_template.clone();
-
-    start_llm_warmup_if_needed(
-        &core.runtime,
-        &session_id,
-        &llm_config,
-        llm_http_client.clone(),
-        llm_warmup_state.clone(),
-    );
+    let strip_trailing_punctuation = cfg.output.strip_trailing_punctuation;
 
     // Spawn the session task
     core.runtime.spawn(async move {
@@ -351,17 +238,10 @@ pub extern "C" fn sp_core_session_begin(context: SPSessionContext) -> i32 {
             session_token,
             mode,
             audio_rx,
-            accept_asr_rx,
             asr_config,
             asr_provider_name,
             asr,
-            llm_config,
-            llm_http_client,
-            llm_warmup_state,
-            dictionary,
-            dictionary_max_candidates,
-            system_prompt,
-            user_prompt_template,
+            strip_trailing_punctuation,
             cancelled,
         )
         .await;
@@ -417,7 +297,6 @@ pub extern "C" fn sp_core_session_cancel() -> i32 {
         core.cancelled.store(true, Ordering::SeqCst);
         // Drop the audio sender to unblock the session task
         core.audio_tx = None;
-        core.accept_asr_tx = None;
     }
     0
 }
@@ -428,17 +307,11 @@ pub extern "C" fn sp_core_session_cancel() -> i32 {
 /// the LLM correction future is still in progress.
 #[no_mangle]
 pub extern "C" fn sp_core_accept_asr_result() -> i32 {
-    log::info!("sp_core_accept_asr_result called");
-
-    let global = CORE.lock().unwrap();
-    if let Some(ref core) = *global {
-        if let Some(ref tx) = core.accept_asr_tx {
-            return if tx.send(true).is_ok() { 0 } else { -1 };
-        }
-    }
+    log::debug!("sp_core_accept_asr_result ignored: LLM correction is not included");
     -1
 }
 
+#[cfg(any())]
 fn validate_prompt_templates(
     templates: &[config::PromptTemplate],
 ) -> std::result::Result<(), String> {
@@ -478,6 +351,7 @@ fn validate_prompt_templates(
 /// Each entry mirrors config::PromptTemplate for lossless round-tripping.
 /// Caller must free with sp_core_free_string().
 #[no_mangle]
+#[cfg(any())]
 pub extern "C" fn sp_core_get_prompt_templates_json() -> *mut c_char {
     let global = CORE.lock().unwrap();
     if let Some(ref core) = *global {
@@ -496,6 +370,7 @@ pub extern "C" fn sp_core_get_prompt_templates_json() -> *mut c_char {
 /// # Safety
 /// `json_str` must be a valid null-terminated C string.
 #[no_mangle]
+#[cfg(any())]
 pub unsafe extern "C" fn sp_core_set_prompt_templates_json(json_str: *const c_char) -> i32 {
     let json = match unsafe { cstr_to_str(json_str) } {
         Some(s) => s,
@@ -577,6 +452,7 @@ pub unsafe extern "C" fn sp_core_set_prompt_templates_json(json_str: *const c_ch
 /// # Safety
 /// `asr_text_ptr` must be a valid null-terminated C string.
 #[no_mangle]
+#[cfg(any())]
 pub unsafe extern "C" fn sp_core_rewrite_with_template(
     template_index: i32,
     asr_text_ptr: *const c_char,
@@ -649,7 +525,7 @@ pub unsafe extern "C" fn sp_core_rewrite_with_template(
         };
 
         let llm: Box<dyn LlmProvider> = match active_profile.provider.as_str() {
-            #[cfg(feature = "mlx")]
+            #[cfg(any())]
             "mlx" => {
                 let model_path = config::resolve_model_dir(&active_profile.mlx.model)
                     .to_string_lossy()
@@ -805,17 +681,10 @@ async fn run_session(
     session_token: u64,
     mode: SPSessionMode,
     mut audio_rx: mpsc::Receiver<Vec<u8>>,
-    mut accept_asr_rx: watch::Receiver<bool>,
     asr_config: AsrConfig,
     asr_provider: String,
     mut asr: Box<dyn AsrProvider>,
-    llm_config: config::LlmSection,
-    llm_http_client: Client,
-    llm_warmup_state: Arc<Mutex<LlmWarmupState>>,
-    dictionary: Vec<String>,
-    dictionary_max_candidates: usize,
-    system_prompt: String,
-    user_prompt_template: String,
+    strip_trailing_punctuation: bool,
     cancelled: Arc<AtomicBool>,
 ) {
     let final_wait_timeout_ms = asr_config.final_wait_timeout_ms;
@@ -988,12 +857,7 @@ async fn run_session(
         return;
     }
 
-    let interim_history = aggregator.interim_history(10).to_vec();
-    log::info!(
-        "[{session_id}] ASR result: {} chars, {} interim revisions",
-        asr_text.len(),
-        interim_history.len(),
-    );
+    log::info!("[{session_id}] ASR result: {} chars", asr_text.len());
 
     // Store ASR text in session
     {
@@ -1003,157 +867,39 @@ async fn run_session(
         }
     }
 
-    // Notify ObjC of the final ASR text so the overlay can display it
-    // during the LLM correction phase.
-    invoke_asr_final_text(session_token, &asr_text);
+    // Notify ObjC of the final text so the overlay matches what will be
+    // pasted when sentence-final punctuation removal is enabled.
+    let display_text = if strip_trailing_punctuation {
+        strip_sentence_final_punctuation(&asr_text)
+    } else {
+        asr_text.clone()
+    };
+    invoke_asr_final_text(session_token, &display_text);
 
-    // --- LLM Correction ---
-    // Check cancellation before the (potentially slow) LLM call so that an
-    // aborted old session exits quickly when a new session has started.
+    // Check cancellation before shaping and delivering the result so an
+    // aborted old session cannot paste into the new session's target.
     if cancelled.load(Ordering::SeqCst) {
-        log::info!("[{session_id}] session cancelled before LLM correction");
+        log::info!("[{session_id}] session cancelled before result delivery");
         invoke_state_changed(session_token, "cancelled");
         cleanup_session(&session_arc);
         invoke_state_changed(session_token, "idle");
         return;
     }
 
-    let llm_enabled = llm_enabled_for_session(&llm_config);
+    let final_text = display_text;
+    let llm_applied = false;
 
-    let (final_text, llm_applied) = if llm_enabled {
-        {
-            let mut s = session_arc.lock().unwrap();
-            if let Some(ref mut session) = *s {
-                let _ = session.transition(SessionState::Correcting);
-            }
-        }
-        invoke_state_changed(session_token, "correcting");
-
-        let active_profile = llm_config
-            .active_profile_config()
-            .expect("llm_enabled_for_session checked the active LLM profile");
-
-        let llm: Box<dyn LlmProvider> = match active_profile.provider.as_str() {
-            #[cfg(feature = "mlx")]
-            "mlx" => {
-                let model_path = config::resolve_model_dir(&active_profile.mlx.model)
-                    .to_string_lossy()
-                    .to_string();
-                log::info!("[{session_id}] using MLX LLM provider: {model_path}");
-                Box::new(MlxLlmProvider::new(
-                    model_path,
-                    llm_config.temperature,
-                    llm_config.top_p,
-                    llm_config.max_output_tokens,
-                    llm_config.timeout_ms,
-                ))
-            }
-            _ => Box::new(OpenAiCompatibleProvider::from_profile(
-                llm_http_client,
-                active_profile.clone(),
-                llm_config.temperature,
-                llm_config.top_p,
-                llm_config.max_output_tokens,
-            )),
-        };
-
-        // Filter dictionary candidates for prompt
-        let candidates =
-            prompt::filter_dictionary_candidates(&dictionary, &asr_text, dictionary_max_candidates);
-
-        log::info!(
-            "[{session_id}] LLM request — asr_text_len: {}",
-            asr_text.len()
-        );
-        log::debug!("[{session_id}] LLM request — asr_text: \"{}\"", asr_text);
-        // Skip interim history for local LLM — small models don't benefit from it
-        // and it increases prompt length / inference time.
-        let history = if active_profile.provider == "mlx" {
-            &[][..]
-        } else {
-            &interim_history[..]
-        };
-
-        log::info!(
-            "[{session_id}] LLM request — {} dictionary entries, {} interim revisions",
-            candidates.len(),
-            history.len()
-        );
-
-        let user_prompt =
-            prompt::render_user_prompt(&user_prompt_template, &asr_text, &candidates, history);
-        log::debug!("[{session_id}] LLM user prompt:\n{}", user_prompt);
-        let user_prompt_stable_prefix_len =
-            prompt::stable_user_prompt_prefix_len(&user_prompt_template, &user_prompt, &candidates);
-
-        let request = CorrectionRequest {
-            asr_text: asr_text.clone(),
-            dictionary_entries: candidates,
-            system_prompt,
-            user_prompt,
-            user_prompt_stable_prefix_len,
-        };
-
-        let correction = llm.correct(&request);
-        tokio::pin!(correction);
-
-        tokio::select! {
-            result = &mut correction => {
-                match result {
-                    Ok(corrected) => {
-                        mark_llm_connection_touched(&llm_warmup_state);
-                        if prompt::looks_like_degenerate_rewrite(
-                            &corrected,
-                            &request.asr_text,
-                            &request.dictionary_entries,
-                        ) {
-                            log::warn!(
-                                "[{session_id}] LLM output looks degenerate ({} chars from {} chars ASR); falling back to raw ASR text",
-                                corrected.len(),
-                                request.asr_text.len()
-                            );
-                            (asr_text.clone(), false)
-                        } else {
-                            log::info!("[{session_id}] LLM corrected: {} chars", corrected.len());
-                            (corrected, true)
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("[{session_id}] LLM failed, falling back to ASR text: {e}");
-                        invoke_session_warning(session_token, &format!("LLM correction failed: {e}"));
-                        (asr_text.clone(), false)
-                    }
-                }
-            }
-            accepted = wait_for_asr_accept(&mut accept_asr_rx) => {
-                if accepted {
-                    log::info!("[{session_id}] user accepted raw ASR text; aborting LLM correction");
-                } else {
-                    log::debug!("[{session_id}] ASR accept channel closed; falling back to raw ASR text");
-                }
-                (asr_text.clone(), false)
-            }
-        }
-    } else {
-        if !llm_config.enabled {
-            log::info!("[{session_id}] LLM disabled, using raw ASR text");
-        } else {
-            log::info!("[{session_id}] LLM not configured, using raw ASR text");
-        }
-        (asr_text.clone(), false)
-    };
-
-    // Check cancellation after LLM (which may have taken seconds) to avoid
+    // Check cancellation after the result shaping step to avoid
     // pasting stale text from an aborted session into the new session's window.
     if cancelled.load(Ordering::SeqCst) {
-        log::info!("[{session_id}] session cancelled after LLM correction");
+        log::info!("[{session_id}] session cancelled after result shaping");
         invoke_state_changed(session_token, "cancelled");
         cleanup_session(&session_arc);
         invoke_state_changed(session_token, "idle");
         return;
     }
 
-    // Store corrected text
+    // Store the final ASR text after optional punctuation shaping.
     {
         let mut s = session_arc.lock().unwrap();
         if let Some(ref mut session) = *s {
@@ -1233,12 +979,40 @@ fn format_unexpected_asr_close_error(reason: Option<&str>) -> String {
     }
 }
 
+/// Remove punctuation that an online ASR provider may append at the end of a
+/// sentence.  This is deliberately applied after recognition, so it works
+/// consistently across DoubaoIME and the other online providers.
+fn strip_sentence_final_punctuation(text: &str) -> String {
+    text.trim_end()
+        .trim_end_matches(|ch: char| {
+            matches!(
+                ch,
+                '.' | ','
+                    | ':'
+                    | ';'
+                    | '!'
+                    | '?'
+                    | '。'
+                    | '，'
+                    | '：'
+                    | '；'
+                    | '！'
+                    | '？'
+                    | '、'
+                    | '…'
+            )
+        })
+        .trim_end()
+        .to_string()
+}
+
 fn cleanup_session(session_arc: &Arc<Mutex<Option<Session>>>) {
     let mut s = session_arc.lock().unwrap();
     *s = None;
 }
 
-async fn wait_for_asr_accept(rx: &mut watch::Receiver<bool>) -> bool {
+#[cfg(any())]
+async fn wait_for_asr_accept(rx: &mut tokio::sync::watch::Receiver<bool>) -> bool {
     if *rx.borrow() {
         return true;
     }
@@ -1252,6 +1026,7 @@ async fn wait_for_asr_accept(rx: &mut watch::Receiver<bool>) -> bool {
     false
 }
 
+#[cfg(any())]
 fn llm_enabled_for_session(cfg: &config::LlmSection) -> bool {
     if !cfg.enabled {
         return false;
@@ -1261,6 +1036,7 @@ fn llm_enabled_for_session(cfg: &config::LlmSection) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(any())]
 fn start_llm_warmup_if_needed(
     runtime: &Runtime,
     session_id: &str,
@@ -1340,85 +1116,10 @@ fn start_llm_warmup_if_needed(
     });
 }
 
+#[cfg(any())]
 fn mark_llm_connection_touched(llm_warmup_state: &Arc<Mutex<LlmWarmupState>>) {
     let mut state = llm_warmup_state.lock().unwrap();
     state.last_touched = Some(Instant::now());
-}
-
-// ─── Model Manager FFI ─────────────────────────────────────────────
-
-use std::collections::HashMap;
-use std::ffi::{c_void, CString};
-use tokio_util::sync::CancellationToken;
-
-/// Progress callback for model downloads.
-pub type ModelProgressCallback = extern "C" fn(
-    ctx: *mut c_void,
-    file_index: u32,
-    file_count: u32,
-    bytes_downloaded: u64,
-    bytes_total: u64,
-    filename: *const c_char,
-);
-
-/// Status callback for model downloads.
-/// status: 0=started, 1=completed, 2=error, 3=cancelled
-pub type ModelStatusCallback = extern "C" fn(ctx: *mut c_void, status: i32, message: *const c_char);
-
-struct ModelCallbackCtx {
-    ctx: *mut c_void,
-    progress_cb: ModelProgressCallback,
-    status_cb: ModelStatusCallback,
-}
-unsafe impl Send for ModelCallbackCtx {}
-unsafe impl Sync for ModelCallbackCtx {}
-
-static MODEL_DOWNLOADS: std::sync::Mutex<Option<HashMap<String, CancellationToken>>> =
-    std::sync::Mutex::new(None);
-
-/// Return JSON array of supported local provider names (e.g. ["mlx","sherpa-onnx"]).
-/// Caller must free the returned string with sp_core_free_string().
-#[no_mangle]
-pub extern "C" fn sp_core_supported_local_providers() -> *mut c_char {
-    let providers = model_manager::supported_providers();
-    let json_str = serde_json::to_string(providers).unwrap_or_else(|_| "[]".to_string());
-    CString::new(json_str).unwrap_or_default().into_raw()
-}
-
-/// Return JSON array of supported LLM provider names (e.g. ["openai","mlx"]).
-/// Caller must free the returned string with sp_core_free_string().
-#[no_mangle]
-pub extern "C" fn sp_core_supported_llm_providers() -> *mut c_char {
-    let providers = llm::supported_providers();
-    let json_str = serde_json::to_string(providers).unwrap_or_else(|_| "[]".to_string());
-    CString::new(json_str).unwrap_or_default().into_raw()
-}
-
-/// Scan all models and return JSON array.
-/// Caller must free the returned string with sp_core_free_string().
-#[no_mangle]
-pub extern "C" fn sp_core_scan_models_json() -> *mut c_char {
-    let models = model_manager::scan_supported_models();
-    let json: Vec<serde_json::Value> = models
-        .iter()
-        .map(|m| {
-            let rel_path = m
-                .path
-                .strip_prefix(model_manager::models_dir())
-                .unwrap_or(&m.path);
-            serde_json::json!({
-                "path": rel_path.to_string_lossy(),
-                "provider": m.manifest.provider,
-                "mode": m.manifest.mode.as_deref().unwrap_or(""),
-                "description": m.manifest.description,
-                "repo": m.manifest.repo,
-                "total_size": m.manifest.files.iter().map(|f| f.size).sum::<u64>(),
-                "status": model_manager::model_status(&m.path, model_manager::VerifyMode::CacheOnly) as i32,
-            })
-        })
-        .collect();
-    let json_str = serde_json::to_string(&json).unwrap_or_else(|_| "[]".to_string());
-    CString::new(json_str).unwrap_or_default().into_raw()
 }
 
 /// Get a config value by dot-separated key path (e.g. "asr.doubao.app_key").
@@ -1513,6 +1214,7 @@ pub extern "C" fn sp_config_resolved_trigger_key() -> *mut c_char {
 /// All pointer parameters must be valid null-terminated C strings.
 /// Caller must free the returned pointer with `sp_core_free_string()`.
 #[no_mangle]
+#[cfg(any())]
 pub unsafe extern "C" fn sp_llm_test(
     base_url: *const c_char,
     api_key: *const c_char,
@@ -1636,6 +1338,7 @@ pub unsafe extern "C" fn sp_llm_test(
 /// Pointer parameters must be valid null-terminated C strings (or null).
 /// Caller must free the returned pointer with `sp_core_free_string()`.
 #[no_mangle]
+#[cfg(any())]
 pub unsafe extern "C" fn sp_llm_list_models_json(
     base_url: *const c_char,
     api_key: *const c_char,
@@ -1720,6 +1423,7 @@ pub unsafe extern "C" fn sp_llm_list_models_json(
 /// `profile_json` must be a valid null-terminated C string.
 /// Caller must free the returned pointer with `sp_core_free_string()`.
 #[no_mangle]
+#[cfg(any())]
 pub unsafe extern "C" fn sp_llm_list_models_for_profile_json(
     profile_json: *const c_char,
 ) -> *mut c_char {
@@ -1814,6 +1518,7 @@ pub unsafe extern "C" fn sp_llm_list_models_for_profile_json(
 
 /// Return the active LLM profile id and saved profile map as JSON.
 #[no_mangle]
+#[cfg(any())]
 pub extern "C" fn sp_llm_profiles_json() -> *mut c_char {
     let json = match config::llm_profiles_payload() {
         Ok(payload) => serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into()),
@@ -1832,6 +1537,7 @@ pub extern "C" fn sp_llm_profiles_json() -> *mut c_char {
 /// # Safety
 /// `profiles_json` must be a valid null-terminated C string.
 #[no_mangle]
+#[cfg(any())]
 pub unsafe extern "C" fn sp_llm_save_profiles_json(profiles_json: *const c_char) -> i32 {
     let Some(json) = (unsafe { cstr_to_str(profiles_json) }) else {
         return -1;
@@ -1857,6 +1563,7 @@ pub unsafe extern "C" fn sp_llm_save_profiles_json(profiles_json: *const c_char)
 /// # Safety
 /// `profile_json` must be a valid null-terminated C string.
 #[no_mangle]
+#[cfg(any())]
 pub unsafe extern "C" fn sp_llm_test_profile_json(profile_json: *const c_char) -> *mut c_char {
     let Some(json) = (unsafe { cstr_to_str(profile_json) }) else {
         return CString::new(
@@ -1925,7 +1632,7 @@ pub unsafe extern "C" fn sp_llm_test_profile_json(profile_json: *const c_char) -
     };
     let start = Instant::now();
     let result = match profile.provider.as_str() {
-        #[cfg(feature = "mlx")]
+        #[cfg(any())]
         "mlx" => {
             let model_path = config::resolve_model_dir(&profile.mlx.model)
                 .to_string_lossy()
@@ -1939,7 +1646,7 @@ pub unsafe extern "C" fn sp_llm_test_profile_json(profile_json: *const c_char) -
             );
             rt.block_on(llm.correct(&request))
         }
-        #[cfg(not(feature = "mlx"))]
+        #[cfg(any())]
         "mlx" => Err(errors::KoeError::LlmFailed(
             "MLX LLM support is not enabled in this build".into(),
         )),
@@ -1989,7 +1696,64 @@ pub unsafe extern "C" fn sp_llm_test_profile_json(profile_json: *const c_char) -
         .into_raw()
 }
 
-/// Free a string returned by sp_core_scan_models_json().
+/// Compatibility response for older clients that still ask for LLM data.
+/// This build has no LLM subsystem, so these entry points never perform
+/// network requests or load local models.
+fn llm_removed_response(message: &str) -> *mut c_char {
+    let json = serde_json::json!({
+        "success": false,
+        "elapsed_ms": 0,
+        "models": [],
+        "message": message,
+    });
+    CString::new(json.to_string())
+        .unwrap_or_default()
+        .into_raw()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sp_llm_test(
+    _base_url: *const c_char,
+    _api_key: *const c_char,
+    _model: *const c_char,
+    _max_token_param: *const c_char,
+) -> *mut c_char {
+    llm_removed_response("LLM correction is not included in this build")
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sp_llm_list_models_json(
+    _base_url: *const c_char,
+    _api_key: *const c_char,
+) -> *mut c_char {
+    llm_removed_response("LLM model listing is not included in this build")
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sp_llm_list_models_for_profile_json(
+    _profile_json: *const c_char,
+) -> *mut c_char {
+    llm_removed_response("LLM model listing is not included in this build")
+}
+
+#[no_mangle]
+pub extern "C" fn sp_llm_profiles_json() -> *mut c_char {
+    CString::new(r#"{"active_profile":"","profiles":{}}"#)
+        .unwrap_or_default()
+        .into_raw()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sp_llm_save_profiles_json(_profiles_json: *const c_char) -> i32 {
+    -1
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sp_llm_test_profile_json(_profile_json: *const c_char) -> *mut c_char {
+    llm_removed_response("LLM correction is not included in this build")
+}
+
+/// Free a string returned by this library.
 ///
 /// # Safety
 /// `s` must be a pointer previously returned by this library, or null.
@@ -1999,157 +1763,6 @@ pub unsafe extern "C" fn sp_core_free_string(s: *mut c_char) {
         unsafe {
             drop(CString::from_raw(s));
         }
-    }
-}
-
-/// Model status check with configurable verification mode.
-/// mode: 0=Normal (cached sha256), 1=CacheOnly (no compute), 2=ForceVerify (always compute)
-/// Returns: 0=not installed, 1=incomplete, 2=installed
-///
-/// # Safety
-/// `model_path` must be a valid null-terminated C string.
-#[no_mangle]
-pub unsafe extern "C" fn sp_model_status(model_path: *const c_char, mode: i32) -> i32 {
-    let path = match unsafe { cstr_to_str(model_path) } {
-        Some(s) => s,
-        None => return 0,
-    };
-    let verify_mode = match mode {
-        1 => model_manager::VerifyMode::CacheOnly,
-        2 => model_manager::VerifyMode::ForceVerify,
-        _ => model_manager::VerifyMode::Normal,
-    };
-    let model_dir = config::resolve_model_dir(path);
-    model_manager::model_status(&model_dir, verify_mode) as i32
-}
-
-/// Start downloading a model. Returns 0=started, -1=already downloading, -2=error.
-///
-/// # Safety
-/// `model_path` must be a valid null-terminated C string. `ctx` is passed through to callbacks.
-#[no_mangle]
-pub unsafe extern "C" fn sp_core_download_model(
-    model_path: *const c_char,
-    progress_cb: ModelProgressCallback,
-    status_cb: ModelStatusCallback,
-    ctx: *mut c_void,
-) -> i32 {
-    let path = match unsafe { cstr_to_str(model_path) } {
-        Some(s) => s.to_string(),
-        None => return -2,
-    };
-    let model_dir = config::resolve_model_dir(&path);
-
-    // Register download with cancellation token
-    let cancel_token = {
-        let mut guard = MODEL_DOWNLOADS.lock().unwrap();
-        let map = guard.get_or_insert_with(HashMap::new);
-        if map.contains_key(&path) {
-            return -1;
-        }
-        let token = CancellationToken::new();
-        let clone = token.clone();
-        map.insert(path.clone(), token);
-        clone
-    };
-
-    let cb = Arc::new(ModelCallbackCtx {
-        ctx,
-        progress_cb,
-        status_cb,
-    });
-
-    let global = CORE.lock().unwrap();
-    let runtime = match global.as_ref() {
-        Some(core) => &core.runtime,
-        None => return -2,
-    };
-
-    let path_clone = path.clone();
-    let cb_status = cb.clone();
-
-    runtime.spawn(async move {
-        invoke_model_status(&cb_status, 0, "started");
-
-        let cb_progress = cb_status.clone();
-        let result = model_manager::download_model(
-            &model_dir,
-            move |progress| {
-                if let Ok(cstr) = CString::new(progress.filename.as_str()) {
-                    (cb_progress.progress_cb)(
-                        cb_progress.ctx,
-                        progress.file_index as u32,
-                        progress.file_count as u32,
-                        progress.bytes_downloaded,
-                        progress.bytes_total,
-                        cstr.as_ptr(),
-                    );
-                }
-            },
-            cancel_token,
-        )
-        .await
-        .map(|_| ())
-        .map_err(|e| e.to_string());
-
-        // Unregister download
-        {
-            let mut guard = MODEL_DOWNLOADS.lock().unwrap();
-            if let Some(map) = guard.as_mut() {
-                map.remove(&path_clone);
-            }
-        }
-
-        match result {
-            Ok(()) => invoke_model_status(&cb_status, 1, "completed"),
-            Err(e) if e.contains("cancelled") => invoke_model_status(&cb_status, 3, "cancelled"),
-            Err(e) => invoke_model_status(&cb_status, 2, &e),
-        }
-    });
-
-    0
-}
-
-/// Cancel an active download. Returns 1 if cancelled, 0 if not found.
-///
-/// # Safety
-/// `model_path` must be a valid null-terminated C string.
-#[no_mangle]
-pub unsafe extern "C" fn sp_core_cancel_download(model_path: *const c_char) -> i32 {
-    let path = match unsafe { cstr_to_str(model_path) } {
-        Some(s) => s,
-        None => return 0,
-    };
-    let guard = MODEL_DOWNLOADS.lock().unwrap();
-    if let Some(map) = guard.as_ref() {
-        if let Some(token) = map.get(path) {
-            token.cancel();
-            return 1;
-        }
-    }
-    0
-}
-
-/// Remove downloaded model files (keep manifest). Returns number of files removed, -1 on error.
-///
-/// # Safety
-/// `model_path` must be a valid null-terminated C string.
-#[no_mangle]
-pub unsafe extern "C" fn sp_core_remove_model_files(model_path: *const c_char) -> i32 {
-    let path = match unsafe { cstr_to_str(model_path) } {
-        Some(s) => s,
-        None => return -1,
-    };
-    let model_dir = config::resolve_model_dir(path);
-    match model_manager::remove_model_files(&model_dir) {
-        Ok(n) => n as i32,
-        Err(_) => -1,
-    }
-}
-
-fn invoke_model_status(cb: &ModelCallbackCtx, status: i32, message: &str) {
-    if let Ok(cstr) = CString::new(message) {
-        (cb.status_cb)(cb.ctx, status, cstr.as_ptr());
     }
 }
 
@@ -2165,6 +1778,17 @@ mod tests {
         assert_eq!(hotkey_trigger_mode_code("toggle"), 1);
         assert_eq!(hotkey_trigger_mode_code("double_tap"), 2);
         assert_eq!(hotkey_trigger_mode_code("unknown"), 0);
+    }
+
+    #[test]
+    fn strip_sentence_final_punctuation_removes_common_ascii_and_cjk_marks() {
+        assert_eq!(strip_sentence_final_punctuation("你好。"), "你好");
+        assert_eq!(strip_sentence_final_punctuation("测试？！  "), "测试");
+        assert_eq!(strip_sentence_final_punctuation("hello!?"), "hello");
+        assert_eq!(
+            strip_sentence_final_punctuation("保留无标点文本"),
+            "保留无标点文本"
+        );
     }
 
     /// Mock ASR provider that yields a pre-configured sequence of events.
@@ -2244,24 +1868,6 @@ mod tests {
         assert!(result.unwrap().contains("connection"));
     }
 
-    #[tokio::test]
-    async fn wait_for_asr_accept_returns_true_after_signal() {
-        let (tx, mut rx) = watch::channel(false);
-
-        tx.send(true).unwrap();
-
-        assert!(wait_for_asr_accept(&mut rx).await);
-    }
-
-    #[tokio::test]
-    async fn wait_for_asr_accept_returns_false_when_channel_closes() {
-        let (tx, mut rx) = watch::channel(false);
-
-        drop(tx);
-
-        assert!(!wait_for_asr_accept(&mut rx).await);
-    }
-
     // ── Main loop error-with-partial-text tests ─────────────────────────
 
     /// Simulates the post-ASR decision: should the session fail?
@@ -2301,33 +1907,5 @@ mod tests {
             format_unexpected_asr_close_error(Some("code=1008, reason=\"quota exhausted\""));
         assert!(error.contains("code=1008"));
         assert!(error.contains("quota exhausted"));
-    }
-
-    #[test]
-    fn llm_session_decision_uses_global_enabled() {
-        let mut cfg = Config::default().llm;
-        cfg.enabled = true;
-        assert!(llm_enabled_for_session(&cfg));
-    }
-
-    #[test]
-    fn llm_session_decision_disabled_when_global_disabled() {
-        let mut cfg = Config::default().llm;
-        cfg.enabled = false;
-        assert!(!llm_enabled_for_session(&cfg));
-    }
-
-    #[test]
-    fn validate_prompt_templates_rejects_blank_prompt() {
-        let templates = vec![config::PromptTemplate {
-            name: "Empty".into(),
-            enabled: true,
-            shortcut: 1,
-            system_prompt: Some("   ".into()),
-            system_prompt_path: None,
-        }];
-
-        let error = validate_prompt_templates(&templates).unwrap_err();
-        assert!(error.contains("non-empty prompt"));
     }
 }

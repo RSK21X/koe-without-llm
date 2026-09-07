@@ -5,34 +5,15 @@
 //! from the same config without duplicating per-provider wiring.
 
 use crate::config::{self, Config};
-#[cfg(feature = "wetype-offline")]
-use koe_asr::WeTypeOfflineProvider;
-#[cfg(feature = "apple-speech")]
-use koe_asr::{AppleSpeechConfig, AppleSpeechProvider};
 use koe_asr::{
     AsrConfig, AsrProvider, DoubaoImeProvider, DoubaoWsProvider, GlmAsrProvider, MimoAsrProvider,
     QwenAsrProvider,
 };
-#[cfg(feature = "mlx")]
-use koe_asr::{MlxConfig, MlxProvider};
-#[cfg(feature = "sherpa-onnx")]
-use koe_asr::{SherpaOnnxConfig, SherpaOnnxProvider};
 
 /// Provider names that can be constructed in this build.
-/// Local engines (mlx, sherpa-onnx, apple-speech) only appear when their
-/// Cargo features are enabled.
+/// This product build deliberately exposes online ASR providers only.
 pub fn supported_providers() -> Vec<&'static str> {
-    #[allow(unused_mut)]
-    let mut providers = vec!["doubaoime", "doubao", "qwen", "glm", "mimo"];
-    #[cfg(feature = "mlx")]
-    providers.push("mlx");
-    #[cfg(feature = "sherpa-onnx")]
-    providers.push("sherpa-onnx");
-    #[cfg(feature = "wetype-offline")]
-    providers.push("wetype");
-    #[cfg(feature = "apple-speech")]
-    providers.push("apple-speech");
-    providers
+    vec!["doubaoime", "doubao", "qwen", "glm", "mimo"]
 }
 
 /// Build the `AsrConfig` and provider instance for `provider_name`.
@@ -43,7 +24,7 @@ pub fn supported_providers() -> Vec<&'static str> {
 /// should validate against [`supported_providers`] first.
 ///
 /// `dictionary` feeds provider-side hotword biasing where supported
-/// (doubao hotwords, sherpa-onnx hotwords, Apple Speech contextual strings).
+/// (for example, Doubao hotwords).
 pub fn create_asr_provider(
     cfg: &Config,
     provider_name: &str,
@@ -171,55 +152,6 @@ pub fn create_asr_provider(
                 context_messages: Vec::new(),
             };
             (config, Box::new(MimoAsrProvider::new()))
-        }
-        #[cfg(feature = "mlx")]
-        "mlx" => {
-            let mlx = &cfg.asr.mlx;
-            let model_path = config::resolve_model_dir(&mlx.model)
-                .to_string_lossy()
-                .to_string();
-            let mlx_config = MlxConfig {
-                model_path,
-                language: mlx.language.clone(),
-                delay_preset: mlx.delay_preset.clone(),
-            };
-            (AsrConfig::default(), Box::new(MlxProvider::new(mlx_config)))
-        }
-        #[cfg(feature = "sherpa-onnx")]
-        "sherpa-onnx" => {
-            let s = &cfg.asr.sherpa_onnx;
-            let model_dir = config::resolve_model_dir(&s.model);
-            let sherpa_config = SherpaOnnxConfig {
-                model_dir,
-                num_threads: s.num_threads,
-                hotwords: dictionary.to_vec(),
-                hotwords_score: s.hotwords_score,
-                endpoint_silence: s.endpoint_silence,
-            };
-            (
-                AsrConfig::default(),
-                Box::new(SherpaOnnxProvider::new(sherpa_config)),
-            )
-        }
-        #[cfg(feature = "wetype-offline")]
-        "wetype" => {
-            let model_dir = config::resolve_model_dir(&cfg.asr.wetype.model);
-            (
-                AsrConfig::default(),
-                Box::new(WeTypeOfflineProvider::new(model_dir)),
-            )
-        }
-        #[cfg(feature = "apple-speech")]
-        "apple-speech" => {
-            let as_cfg = &cfg.asr.apple_speech;
-            let apple_config = AppleSpeechConfig {
-                locale: as_cfg.locale.clone(),
-                contextual_strings: dictionary.to_vec(),
-            };
-            (
-                AsrConfig::default(),
-                Box::new(AppleSpeechProvider::new(apple_config)),
-            )
         }
         _ => {
             let doubao = &cfg.asr.doubao;

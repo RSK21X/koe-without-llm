@@ -100,20 +100,6 @@ static BOOL configFlagEnabled(const char *keyPath) {
     return [self.audioCaptureManager prepare];
 }
 
-static BOOL configFlagEnabledWithDefault(const char *keyPath, BOOL defaultValue) {
-    char *rawValue = sp_config_get(keyPath);
-    if (!rawValue) return defaultValue;
-
-    BOOL enabled = defaultValue;
-    if (strcmp(rawValue, "true") == 0) {
-        enabled = YES;
-    } else if (strcmp(rawValue, "false") == 0) {
-        enabled = NO;
-    }
-    sp_core_free_string(rawValue);
-    return enabled;
-}
-
 // Phantom-key lab switches (issues #57/#65): env flags that disable whole
 // subsystems so the arming source can be bisected with real-usage rounds.
 // KOE_LAB_NO_HOTKEY=1  -> no SPHotkeyMonitor at all (no tap/monitors/Carbon)
@@ -125,11 +111,9 @@ static BOOL SPLabFlag(const char *name) {
 }
 
 - (BOOL)shouldShowPromptTemplateButtons {
-    return configFlagEnabled("llm.prompt_templates_enabled");
-}
-
-- (BOOL)shouldAutoPasteProcessedText {
-    return configFlagEnabledWithDefault("llm.auto_paste_processed_text", YES);
+    // This customized build is ASR-only. Ignore the legacy flag so old
+    // config files cannot bring back the removed LLM/template UI.
+    return NO;
 }
 
 - (void)showPromptTemplateButtonsIfNeededOrDismiss {
@@ -270,21 +254,6 @@ static BOOL SPLabFlag(const char *name) {
 
     // Request notification permission
     [self.permissionManager requestNotificationPermission];
-
-    // Request Speech Recognition permission if Apple Speech is the configured provider
-    char *rawProvider = sp_config_get("asr.provider");
-    if (rawProvider) {
-        if (strcmp(rawProvider, "apple-speech") == 0) {
-            [self.permissionManager requestSpeechRecognitionPermissionWithCompletion:^(BOOL granted) {
-                NSLog(@"[Koe] Speech recognition permission: %@", granted ? @"granted" : @"denied");
-                if (!granted) {
-                    [self.permissionManager showPermissionAlertForType:SPPermissionTypeSpeechRecognition
-                                                          settingsURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"]];
-                }
-            }];
-        }
-        sp_core_free_string(rawProvider);
-    }
 
     // Check permissions
     [self.permissionManager checkAllPermissionsWithCompletion:^(BOOL micGranted, BOOL accessibilityGranted, BOOL inputMonitoringGranted) {
@@ -656,7 +625,9 @@ static BOOL SPLabFlag(const char *name) {
 
     uint64_t token = self.rustBridge.currentSessionToken;
     SPPasteInjectionGuard guard = [self injectionGuardForSessionToken:token];
-    BOOL shouldAutoPaste = [self shouldAutoPasteProcessedText];
+    // The customized build has no LLM post-processing stage. Online ASR
+    // output is always handled by the normal paste/copy flow.
+    BOOL shouldAutoPaste = YES;
     BOOL accessOK = [self.permissionManager isAccessibilityGranted];
     BOOL canAutoPaste = shouldAutoPaste && accessOK;
     NSLog(@"[Koe] Accessibility granted: %@", accessOK ? @"YES" : @"NO");

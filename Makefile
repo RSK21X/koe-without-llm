@@ -1,18 +1,15 @@
-.PHONY: build build-mlx build-rust build-xcode generate clean run install-cli install-app
+.PHONY: build build-rust build-xcode generate clean run install-cli install-app
 
 ARCH := aarch64-apple-darwin
 XCODE_ARCH := arm64
 
 build: generate build-rust build-xcode install-cli
 
-build-mlx: generate
-	cd KoeApp && xcodebuild -project Koe.xcodeproj -scheme Koe-MLX -configuration Release -skipPackagePluginValidation -skipMacroValidation ARCHS=$(XCODE_ARCH) build
-
 generate:
 	cd KoeApp && xcodegen generate
 
 build-rust:
-	cargo build --manifest-path koe-core/Cargo.toml --release --target $(ARCH) --no-default-features --features "apple-speech,wetype-offline"
+	cargo build --manifest-path koe-core/Cargo.toml --release --target $(ARCH) --no-default-features
 	cargo build --package koe-cli --release --target $(ARCH)
 
 build-xcode:
@@ -37,7 +34,7 @@ install-cli:
 install-app:
 	@APP_ROOT=$$(xcodebuild -project KoeApp/Koe.xcodeproj -scheme Koe -configuration Release -showBuildSettings 2>/dev/null | grep ' TARGET_BUILD_DIR' | head -1 | awk '{print $$3}')/Koe.app; \
 	if [ ! -d "$$APP_ROOT" ]; then \
-		echo "Release app not found at $$APP_ROOT. Run 'make build' or 'make build-mlx' first."; \
+		echo "Release app not found at $$APP_ROOT. Run 'make build' first."; \
 		exit 1; \
 	fi; \
 	codesign --verify --deep --strict --verbose=2 "$$APP_ROOT"; \

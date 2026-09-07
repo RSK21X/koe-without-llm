@@ -70,25 +70,26 @@ async fn doubaoime_debug_stream_wav() {
     }
     // Trailing silence so VAD closes the utterance.
     for _ in 0..8 {
-        provider.send_audio(&[0u8; CHUNK]).await.expect("send silence");
+        provider
+            .send_audio(&[0u8; CHUNK])
+            .await
+            .expect("send silence");
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     provider.finish_input().await.expect("finish_input");
     eprintln!("=== finished input, reading events");
 
     loop {
-        let ev = match tokio::time::timeout(
-            std::time::Duration::from_secs(15),
-            provider.next_event(),
-        )
-        .await
-        {
-            Ok(ev) => ev,
-            Err(_) => {
-                eprintln!(">>> TIMEOUT waiting for next event");
-                break;
-            }
-        };
+        let ev =
+            match tokio::time::timeout(std::time::Duration::from_secs(15), provider.next_event())
+                .await
+            {
+                Ok(ev) => ev,
+                Err(_) => {
+                    eprintln!(">>> TIMEOUT waiting for next event");
+                    break;
+                }
+            };
         match ev {
             Ok(AsrEvent::Interim(t)) => eprintln!(">>> INTERIM: {t}"),
             Ok(AsrEvent::Definite(t)) => eprintln!(">>> DEFINITE: {t}"),

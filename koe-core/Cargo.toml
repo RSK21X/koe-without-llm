@@ -15,11 +15,9 @@ name = "koe_core"
 crate-type = ["staticlib", "lib"]
 
 [features]
-default = ["mlx", "apple-speech", "sherpa-onnx", "wetype-offline"]
-mlx = ["koe-asr/mlx"]
-apple-speech = ["koe-asr/apple-speech"]
-sherpa-onnx = ["koe-asr/sherpa-onnx"]
-wetype-offline = ["koe-asr/wetype-offline"]
+# This build intentionally contains only network ASR providers.  Keeping the
+# feature list empty makes local model code impossible to link accidentally.
+default = []
 
 [dependencies]
 async-trait.workspace = true
@@ -27,14 +25,10 @@ koe-asr = { path = "../koe-asr" }
 env_logger.workspace = true
 futures-util.workspace = true
 log.workspace = true
-reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls", "http2", "stream", "system-proxy"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde_yaml.workspace = true
-sha2.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
-tokio-util = { workspace = true, features = ["rt"] }
-urlencoding.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]

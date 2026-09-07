@@ -1,11 +1,8 @@
-//! Mixed CJK/Latin tokenization shared by benchmarking and dictionary
-//! suggestion. Each CJK ideograph or kana character is its own token;
+//! Mixed CJK/Latin tokenization shared by benchmarking. Each CJK ideograph or kana character is its own token;
 //! alphanumeric runs (plus apostrophes) form word tokens. Punctuation and
 //! whitespace are separators.
 
-/// A token with its byte span in the original string, so callers can slice
-/// the original text back out (preserving case, hyphens, and spacing that
-/// tokenization normalizes away).
+/// A token with its byte span in the original string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
     /// Lowercased token text, used for comparison.
@@ -62,35 +59,16 @@ pub fn tokenize(text: &str) -> Vec<String> {
     tokenize_spans(text).into_iter().map(|t| t.lower).collect()
 }
 
-/// Merge tokens separated by exactly a hyphen into compound tokens, so
-/// "sherpa-onnx" or "gpt-4" is treated as one unit. Used by dictionary
-/// suggestion, where splitting a compound at a shared part ("onnx") would
-/// truncate the suggested term. Benchmark tokenization stays unmerged.
-pub fn merge_hyphenated(text: &str, tokens: Vec<Token>) -> Vec<Token> {
-    let mut out: Vec<Token> = Vec::with_capacity(tokens.len());
-    for token in tokens {
-        if let Some(last) = out.last_mut() {
-            if last.end < token.start && &text[last.end..token.start] == "-" {
-                last.lower = text[last.start..token.end].to_lowercase();
-                last.end = token.end;
-                continue;
-            }
-        }
-        out.push(token);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn spans_slice_back_to_original() {
-        let text = "用 sherpa-onnx 部署 Whisper";
+        let text = "用 gpt-4 部署 Whisper";
         let tokens = tokenize_spans(text);
         let words: Vec<&str> = tokens.iter().map(|t| &text[t.start..t.end]).collect();
-        assert_eq!(words, vec!["用", "sherpa", "onnx", "部", "署", "Whisper"]);
+        assert_eq!(words, vec!["用", "gpt", "4", "部", "署", "Whisper"]);
         assert_eq!(tokens.last().unwrap().lower, "whisper");
     }
 

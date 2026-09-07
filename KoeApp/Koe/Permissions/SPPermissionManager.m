@@ -3,7 +3,6 @@
 #import <AVFoundation/AVFoundation.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <Cocoa/Cocoa.h>
-#import <Speech/Speech.h>
 #import <UserNotifications/UserNotifications.h>
 
 static NSString *const kDontRemindPrefix = @"KoePermissionDontRemind_";
@@ -84,26 +83,6 @@ static CGEventRef inputMonitoringProbeCallback(CGEventTapProxy proxy,
     return NO;
 }
 
-- (BOOL)isSpeechRecognitionGranted {
-    return [SFSpeechRecognizer authorizationStatus] == SFSpeechRecognizerAuthorizationStatusAuthorized;
-}
-
-- (void)requestSpeechRecognitionPermissionWithCompletion:(void (^)(BOOL))completion {
-    SFSpeechRecognizerAuthorizationStatus status = [SFSpeechRecognizer authorizationStatus];
-    if (status == SFSpeechRecognizerAuthorizationStatusAuthorized) {
-        completion(YES);
-    } else if (status == SFSpeechRecognizerAuthorizationStatusNotDetermined) {
-        [SFSpeechRecognizer requestAuthorization:^(SFSpeechRecognizerAuthorizationStatus newStatus) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                completion(newStatus == SFSpeechRecognizerAuthorizationStatusAuthorized);
-            });
-        }];
-    } else {
-        NSLog(@"[Koe] Speech recognition permission denied or restricted");
-        completion(NO);
-    }
-}
-
 - (void)requestNotificationPermission {
     UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
     [center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
@@ -165,10 +144,6 @@ static CGEventRef inputMonitoringProbeCallback(CGEventTapProxy proxy,
         case SPPermissionTypeInputMonitoring:
             title = KoeLocalizedString(@"permission.inputMonitoring.title");
             message = KoeLocalizedString(@"permission.inputMonitoring.message");
-            break;
-        case SPPermissionTypeSpeechRecognition:
-            title = KoeLocalizedString(@"permission.speechRecognition.title");
-            message = KoeLocalizedString(@"permission.speechRecognition.message");
             break;
     }
 

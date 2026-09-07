@@ -7,18 +7,33 @@
 #import "SPTheme.h"
 #import <Carbon/Carbon.h>
 #import <Cocoa/Cocoa.h>
-#import <Speech/Speech.h>
 
-// Apple Speech asset management FFI (KoeAppleSpeech Swift package)
-extern int32_t koe_apple_speech_is_available(void);
-extern int32_t koe_apple_speech_asset_status(const char *locale);
-extern void koe_apple_speech_install_asset(const char *locale,
-                                           void (*callback)(void *ctx,
-                                                            int32_t event_type,
-                                                            const char *text),
-                                           void *ctx);
-extern int32_t koe_apple_speech_release_asset(const char *locale);
-extern uint8_t *koe_apple_speech_supported_locales(uint32_t *outLen);
+// Local speech engines are not part of this build.  These compatibility
+// stubs keep old config migration code harmless if an older config still
+// mentions Apple Speech; the provider is never offered by the UI or Rust
+// provider factory.
+static int32_t koe_apple_speech_is_available(void) { return 0; }
+static int32_t koe_apple_speech_asset_status(const char *locale) {
+  (void)locale;
+  return 0;
+}
+static void koe_apple_speech_install_asset(
+    const char *locale,
+    void (*callback)(void *ctx, int32_t event_type, const char *text),
+    void *ctx) {
+  (void)locale;
+  if (callback)
+    callback(ctx, 3, "Apple Speech is not included in this build");
+}
+static int32_t koe_apple_speech_release_asset(const char *locale) {
+  (void)locale;
+  return 0;
+}
+static uint8_t *koe_apple_speech_supported_locales(uint32_t *outLen) {
+  if (outLen)
+    *outLen = 0;
+  return NULL;
+}
 
 static NSString *const kConfigDir = @".koe";
 static NSString *const kDictionaryFile = @"dictionary.txt";
@@ -859,6 +874,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
 @property(nonatomic, strong) NSTextField *overlayBottomMarginValueLabel;
 @property(nonatomic, strong) NSSwitch *overlayLimitVisibleLinesSwitch;
 @property(nonatomic, strong) NSPopUpButton *overlayMaxVisibleLinesPopup;
+@property(nonatomic, strong) NSSwitch *stripTrailingPunctuationSwitch;
 
 // Dictionary
 @property(nonatomic, strong) NSTextView *dictionaryTextView;
@@ -909,7 +925,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
                           NSWindowStyleMaskFullSizeContentView
                   backing:NSBackingStoreBuffered
                     defer:YES];
-  window.title = @"Koe Settings";
+  window.title = @"Koe 设置";
   window.titlebarAppearsTransparent = YES;
   window.titleVisibility = NSWindowTitleHidden;
   window.movableByWindowBackground = YES;
@@ -1026,7 +1042,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   NSView *footer = [NSView new];
   footer.translatesAutoresizingMaskIntoConstraints = NO;
 
-  NSButton *saveButton = [NSButton buttonWithTitle:@"Save"
+  NSButton *saveButton = [NSButton buttonWithTitle:@"保存"
                                             target:self
                                             action:@selector(saveConfig:)];
   saveButton.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1034,7 +1050,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   saveButton.keyEquivalent = @"\r";
   [footer addSubview:saveButton];
 
-  NSButton *cancelButton = [NSButton buttonWithTitle:@"Cancel"
+  NSButton *cancelButton = [NSButton buttonWithTitle:@"取消"
                                               target:self
                                               action:@selector(cancelSetup:)];
   cancelButton.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1089,21 +1105,15 @@ static NSString *SPCondensedProviderError(NSString *raw) {
 
 - (NSString *)pageTitleForPane:(NSString *)identifier {
   if ([identifier isEqualToString:kToolbarASR])
-    return @"ASR";
-  if ([identifier isEqualToString:kToolbarLLM])
-    return @"LLM";
+    return @"语音识别";
   if ([identifier isEqualToString:kToolbarOverlay])
-    return @"Overlay";
+    return @"悬浮窗";
   if ([identifier isEqualToString:kToolbarHotkey])
-    return @"Controls";
+    return @"快捷键与反馈";
   if ([identifier isEqualToString:kToolbarDictionary])
-    return @"Dictionary";
-  if ([identifier isEqualToString:kToolbarSystemPrompt])
-    return @"Prompt";
-  if ([identifier isEqualToString:kToolbarTemplates])
-    return @"Templates";
+    return @"词典";
   if ([identifier isEqualToString:kToolbarAbout])
-    return @"About";
+    return @"关于";
   return @"";
 }
 
@@ -1119,10 +1129,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   if ([self.currentPaneIdentifier isEqualToString:identifier])
     return;
 
-  // Save template edits before switching away
-  if ([self.currentPaneIdentifier isEqualToString:kToolbarTemplates]) {
-    [self saveCurrentTemplateEdits];
-  } else if ([self.currentPaneIdentifier isEqualToString:kToolbarOverlay]) {
+  if ([self.currentPaneIdentifier isEqualToString:kToolbarOverlay]) {
     [self hideRuntimeOverlayPreview];
   }
   [self endHotkeyRecording];
@@ -1136,18 +1143,12 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   NSView *paneView;
   if ([identifier isEqualToString:kToolbarASR]) {
     paneView = [self buildAsrPane];
-  } else if ([identifier isEqualToString:kToolbarLLM]) {
-    paneView = [self buildLlmPane];
   } else if ([identifier isEqualToString:kToolbarOverlay]) {
     paneView = [self buildOverlayPane];
   } else if ([identifier isEqualToString:kToolbarHotkey]) {
     paneView = [self buildHotkeyPane];
   } else if ([identifier isEqualToString:kToolbarDictionary]) {
     paneView = [self buildDictionaryPane];
-  } else if ([identifier isEqualToString:kToolbarSystemPrompt]) {
-    paneView = [self buildSystemPromptPane];
-  } else if ([identifier isEqualToString:kToolbarTemplates]) {
-    paneView = [self buildTemplatesPane];
   } else if ([identifier isEqualToString:kToolbarAbout]) {
     paneView = [self buildAboutPane];
   }
@@ -1201,8 +1202,8 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   CGFloat contentW = paneWidth - 2.0 * contentX;
   // Label column measured from the actual strings so no label ever clips.
   CGFloat labelW = [self formLabelColumnWidthForTitles:@[
-    @"Provider", @"Auth Mode", @"API Key", @"App Key", @"Access Key",
-    @"Language", @"Model", @"Endpoint Silence", @"Output Variant"
+    @"服务商", @"认证方式", @"API 密钥", @"应用密钥", @"访问密钥",
+    @"语言", @"模型", @"断句等待", @"输出格式"
   ]];
   // The form sits inside a card, so its columns are inset by the card padding.
   CGFloat formX = contentX + SPTheme.cardPadding;
@@ -1224,14 +1225,14 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   // Description
   NSTextField *desc =
       [self addSettingsDescriptionText:
-                @"Choose the ASR provider used for transcription."
+                @"选择用于语音转文字的在线识别服务。"
                                 toPane:pane
                                   topY:y
                                      x:contentX
                                  width:contentW];
 
   NSTextField *sectionTitle = [self
-      sectionTitleLabel:@"Connection"
+      sectionTitleLabel:@"连接设置"
                   frame:NSMakeRect(contentX, floor(NSMinY(desc.frame) - 36.0),
                                    contentW, 20)];
   [pane addSubview:sectionTitle];
@@ -1250,51 +1251,27 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   CGFloat formStartY = y;
 
   // Provider
-  [pane addSubview:[self formLabel:@"Provider"
+  [pane addSubview:[self formLabel:@"服务商"
                              frame:NSMakeRect(formX, y, labelW, 22)]];
   self.asrProviderPopup =
       [[NSPopUpButton alloc] initWithFrame:NSMakeRect(fieldX, y - 2, 200, 26)
                                  pullsDown:NO];
-  [self.asrProviderPopup addItemWithTitle:@"DoubaoIME (Built-in, Free)"];
+  [self.asrProviderPopup addItemWithTitle:@"豆包输入法（内置，免费）"];
   [self.asrProviderPopup lastItem].representedObject = @"doubaoime";
-  [self.asrProviderPopup addItemWithTitle:@"Doubao (ByteDance)"];
+  [self.asrProviderPopup addItemWithTitle:@"豆包（火山引擎）"];
   [self.asrProviderPopup lastItem].representedObject = @"doubao";
-  [self.asrProviderPopup addItemWithTitle:@"Qwen (Alibaba Cloud)"];
+  [self.asrProviderPopup addItemWithTitle:@"通义千问（阿里云）"];
   [self.asrProviderPopup lastItem].representedObject = @"qwen";
-  [self.asrProviderPopup addItemWithTitle:@"GLM (Zhipu)"];
+  [self.asrProviderPopup addItemWithTitle:@"GLM（智谱）"];
   [self.asrProviderPopup lastItem].representedObject = @"glm";
-  [self.asrProviderPopup addItemWithTitle:@"MiMo (Xiaomi)"];
+  [self.asrProviderPopup addItemWithTitle:@"MiMo（小米）"];
   [self.asrProviderPopup lastItem].representedObject = @"mimo";
-  NSArray<NSString *> *supportedLocalProviders =
-      [self.rustBridge supportedLocalProviders];
-  // Add Apple Speech (macOS 26+, no model download required; also requires the
-  // apple-speech feature to be compiled into the Rust core — excluded on
-  // x86_64)
-  if (@available(macOS 26.0, *)) {
-    if ([supportedLocalProviders containsObject:@"apple-speech"]) {
-      [self.asrProviderPopup addItemWithTitle:@"Apple Speech (On-Device)"];
-      [self.asrProviderPopup lastItem].representedObject = @"apple-speech";
-    }
-  }
-  // Add local providers supported by this build (model-based)
-  NSDictionary *localProviderLabels = @{
-    @"mlx" : @"MLX (Apple Silicon)",
-    @"sherpa-onnx" : @"Sherpa-ONNX",
-    @"wetype" : @"WeType (On-Device)",
-  };
-  for (NSString *provider in supportedLocalProviders) {
-    NSString *label = localProviderLabels[provider];
-    if (!label)
-      continue; // apple-speech handled above
-    [self.asrProviderPopup addItemWithTitle:label];
-    [self.asrProviderPopup lastItem].representedObject = provider;
-  }
   [self.asrProviderPopup setTarget:self];
   [self.asrProviderPopup setAction:@selector(asrProviderChanged:)];
   [pane addSubview:self.asrProviderPopup];
 
   // Test button next to Provider
-  self.asrTestButton = [NSButton buttonWithTitle:@"Test"
+  self.asrTestButton = [NSButton buttonWithTitle:@"测试连接"
                                           target:self
                                           action:@selector(testAsrConnection:)];
   self.asrTestButton.bezelStyle = NSBezelStyleRounded;
@@ -1303,7 +1280,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   y -= rowH;
 
   // Auth Mode segmented control (Doubao only)
-  NSTextField *authModeLabel = [self formLabel:@"Auth Mode"
+  NSTextField *authModeLabel = [self formLabel:@"认证方式"
                                          frame:NSMakeRect(formX, y, labelW, 22)];
   authModeLabel.tag = 1006;
   authModeLabel.hidden = YES;
@@ -1311,8 +1288,8 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.asrAuthModeControl = [[NSSegmentedControl alloc]
       initWithFrame:NSMakeRect(fieldX, y - 1, 240, 24)];
   [self.asrAuthModeControl setSegmentCount:2];
-  [self.asrAuthModeControl setLabel:@"New Console" forSegment:0];
-  [self.asrAuthModeControl setLabel:@"Legacy Console" forSegment:1];
+  [self.asrAuthModeControl setLabel:@"新版控制台" forSegment:0];
+  [self.asrAuthModeControl setLabel:@"旧版控制台" forSegment:1];
   [self.asrAuthModeControl setSelectedSegment:0];
   [self.asrAuthModeControl setTarget:self];
   [self.asrAuthModeControl setAction:@selector(asrAuthModeChanged:)];
@@ -1326,12 +1303,12 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.asrApiKeySecureField = [[NSSecureTextField alloc]
       initWithFrame:NSMakeRect(fieldX, y, secFieldW, 22)];
   self.asrApiKeySecureField.placeholderString =
-      @"API Key from Volcengine Console";
+      @"火山引擎控制台 API 密钥";
   self.asrApiKeySecureField.font = [NSFont systemFontOfSize:13];
   self.asrApiKeySecureField.hidden = YES;
   [pane addSubview:self.asrApiKeySecureField];
   self.asrApiKeyField = [self formTextField:NSMakeRect(fieldX, y, secFieldW, 22)
-                                placeholder:@"API Key from Volcengine Console"];
+                                placeholder:@"火山引擎控制台 API 密钥"];
   self.asrApiKeyField.hidden = YES;
   [pane addSubview:self.asrApiKeyField];
   self.asrApiKeyToggle = [self
@@ -1339,7 +1316,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
                   action:@selector(toggleAsrApiKeyVisibility:)];
   self.asrApiKeyToggle.hidden = YES;
   [pane addSubview:self.asrApiKeyToggle];
-  NSTextField *apiKeyLabel = [self formLabel:@"API Key"
+  NSTextField *apiKeyLabel = [self formLabel:@"API 密钥"
                                        frame:NSMakeRect(formX, y, labelW, 22)];
   apiKeyLabel.tag = 1007;
   apiKeyLabel.hidden = YES;
@@ -1347,15 +1324,15 @@ static NSString *SPCondensedProviderError(NSString *raw) {
 
   // App Key (Doubao legacy mode)
   self.asrAppKeyField = [self formTextField:NSMakeRect(fieldX, y, fieldW, 22)
-                                placeholder:@"Volcengine App ID"];
+                                placeholder:@"火山引擎 App ID"];
   [pane addSubview:self.asrAppKeyField];
-  NSTextField *appKeyLabel = [self formLabel:@"App Key"
+  NSTextField *appKeyLabel = [self formLabel:@"应用密钥"
                                        frame:NSMakeRect(formX, y, labelW, 22)];
   appKeyLabel.tag = 1001;
   [pane addSubview:appKeyLabel];
 
   // Apple Speech locale popup (same row as App Key / Model, tag 1005)
-  NSTextField *localeLabel = [self formLabel:@"Language"
+  NSTextField *localeLabel = [self formLabel:@"语言"
                                        frame:NSMakeRect(formX, y, labelW, 22)];
   localeLabel.tag = 1005;
   localeLabel.hidden = YES;
@@ -1371,7 +1348,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   [pane addSubview:self.appleSpeechLocalePopup];
 
   // Row 1: Model popup + Download button (Local providers, same row as App Key)
-  self.localModelLabel = [self formLabel:@"Model"
+  self.localModelLabel = [self formLabel:@"模型"
                                    frame:NSMakeRect(formX, y, labelW, 22)];
   self.localModelLabel.tag = 1004;
   self.localModelLabel.hidden = YES;
@@ -1389,7 +1366,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
       initWithFrame:NSMakeRect(fieldX + fieldW - 20, y + 1, 20, 20)];
   self.modelDownloadButton.image =
       [NSImage imageWithSystemSymbolName:@"arrow.down.circle"
-                accessibilityDescription:@"Download"];
+                accessibilityDescription:@"下载"];
   self.modelDownloadButton.bezelStyle = NSBezelStyleInline;
   self.modelDownloadButton.bordered = NO;
   self.modelDownloadButton.imageScaling = NSImageScaleProportionallyUpOrDown;
@@ -1417,7 +1394,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.modelDeleteButton = [[NSButton alloc]
       initWithFrame:NSMakeRect(fieldX + fieldW - 20, y + 1, 20, 20)];
   self.modelDeleteButton.image = [NSImage imageWithSystemSymbolName:@"trash"
-                                           accessibilityDescription:@"Delete"];
+                                           accessibilityDescription:@"删除"];
   self.modelDeleteButton.bezelStyle = NSBezelStyleInline;
   self.modelDeleteButton.bordered = NO;
   self.modelDeleteButton.imageScaling = NSImageScaleProportionallyUpOrDown;
@@ -1459,12 +1436,12 @@ static NSString *SPCondensedProviderError(NSString *raw) {
 
   self.asrAccessKeySecureField = [[NSSecureTextField alloc]
       initWithFrame:NSMakeRect(fieldX, accessKeyY, secFieldW, 22)];
-  self.asrAccessKeySecureField.placeholderString = @"Volcengine Access Token";
+  self.asrAccessKeySecureField.placeholderString = @"火山引擎访问令牌";
   self.asrAccessKeySecureField.font = [NSFont systemFontOfSize:13];
   [pane addSubview:self.asrAccessKeySecureField];
   self.asrAccessKeyField =
       [self formTextField:NSMakeRect(fieldX, accessKeyY, secFieldW, 22)
-              placeholder:@"Volcengine Access Token"];
+              placeholder:@"火山引擎访问令牌"];
   self.asrAccessKeyField.hidden = YES;
   [pane addSubview:self.asrAccessKeyField];
   self.asrAccessKeyToggle =
@@ -1473,7 +1450,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
                         action:@selector(toggleAsrAccessKeyVisibility:)];
   [pane addSubview:self.asrAccessKeyToggle];
   NSTextField *accessKeyLabel =
-      [self formLabel:@"Access Key"
+      [self formLabel:@"访问密钥"
                 frame:NSMakeRect(formX, accessKeyY, labelW, 22)];
   accessKeyLabel.tag = 1002;
   [pane addSubview:accessKeyLabel];
@@ -1483,13 +1460,13 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.asrQwenApiKeySecureField = [[NSSecureTextField alloc]
       initWithFrame:NSMakeRect(fieldX, qwenY, secFieldW, 22)];
   self.asrQwenApiKeySecureField.placeholderString =
-      @"DashScope API Key (sk-xxx)";
+      @"百炼 API 密钥（sk-xxx）";
   self.asrQwenApiKeySecureField.font = [NSFont systemFontOfSize:13];
   self.asrQwenApiKeySecureField.hidden = YES;
   [pane addSubview:self.asrQwenApiKeySecureField];
   self.asrQwenApiKeyField =
       [self formTextField:NSMakeRect(fieldX, qwenY, secFieldW, 22)
-              placeholder:@"DashScope API Key (sk-xxx)"];
+              placeholder:@"百炼 API 密钥（sk-xxx）"];
   self.asrQwenApiKeyField.hidden = YES;
   [pane addSubview:self.asrQwenApiKeyField];
   self.asrQwenApiKeyToggle = [self
@@ -1498,7 +1475,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.asrQwenApiKeyToggle.hidden = YES;
   [pane addSubview:self.asrQwenApiKeyToggle];
   NSTextField *qwenKeyLabel =
-      [self formLabel:@"API Key" frame:NSMakeRect(formX, qwenY, labelW, 22)];
+      [self formLabel:@"API 密钥" frame:NSMakeRect(formX, qwenY, labelW, 22)];
   qwenKeyLabel.tag = 1003;
   qwenKeyLabel.hidden = YES;
   [pane addSubview:qwenKeyLabel];
@@ -1508,13 +1485,13 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.asrGlmApiKeySecureField = [[NSSecureTextField alloc]
       initWithFrame:NSMakeRect(fieldX, glmY, secFieldW, 22)];
   self.asrGlmApiKeySecureField.placeholderString =
-      @"API Key from bigmodel.cn";
+      @"bigmodel.cn API 密钥";
   self.asrGlmApiKeySecureField.font = [NSFont systemFontOfSize:13];
   self.asrGlmApiKeySecureField.hidden = YES;
   [pane addSubview:self.asrGlmApiKeySecureField];
   self.asrGlmApiKeyField =
       [self formTextField:NSMakeRect(fieldX, glmY, secFieldW, 22)
-              placeholder:@"API Key from bigmodel.cn"];
+              placeholder:@"bigmodel.cn API 密钥"];
   self.asrGlmApiKeyField.hidden = YES;
   [pane addSubview:self.asrGlmApiKeyField];
   self.asrGlmApiKeyToggle = [self
@@ -1523,7 +1500,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.asrGlmApiKeyToggle.hidden = YES;
   [pane addSubview:self.asrGlmApiKeyToggle];
   NSTextField *glmKeyLabel =
-      [self formLabel:@"API Key" frame:NSMakeRect(formX, glmY, labelW, 22)];
+      [self formLabel:@"API 密钥" frame:NSMakeRect(formX, glmY, labelW, 22)];
   glmKeyLabel.tag = 1010;
   glmKeyLabel.hidden = YES;
   [pane addSubview:glmKeyLabel];
@@ -1533,13 +1510,13 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.asrMimoApiKeySecureField = [[NSSecureTextField alloc]
       initWithFrame:NSMakeRect(fieldX, mimoY, secFieldW, 22)];
   self.asrMimoApiKeySecureField.placeholderString =
-      @"API Key from xiaomimimo.com";
+      @"xiaomimimo.com API 密钥";
   self.asrMimoApiKeySecureField.font = [NSFont systemFontOfSize:13];
   self.asrMimoApiKeySecureField.hidden = YES;
   [pane addSubview:self.asrMimoApiKeySecureField];
   self.asrMimoApiKeyField =
       [self formTextField:NSMakeRect(fieldX, mimoY, secFieldW, 22)
-              placeholder:@"API Key from xiaomimimo.com"];
+              placeholder:@"xiaomimimo.com API 密钥"];
   self.asrMimoApiKeyField.hidden = YES;
   [pane addSubview:self.asrMimoApiKeyField];
   self.asrMimoApiKeyToggle = [self
@@ -1548,16 +1525,14 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.asrMimoApiKeyToggle.hidden = YES;
   [pane addSubview:self.asrMimoApiKeyToggle];
   NSTextField *mimoKeyLabel =
-      [self formLabel:@"API Key" frame:NSMakeRect(formX, mimoY, labelW, 22)];
+      [self formLabel:@"API 密钥" frame:NSMakeRect(formX, mimoY, labelW, 22)];
   mimoKeyLabel.tag = 1011;
   mimoKeyLabel.hidden = YES;
   [pane addSubview:mimoKeyLabel];
   // Privacy notice — audio is sent to Xiaomi's servers, not ours.
   NSTextField *mimoPrivacyNotice = [NSTextField wrappingLabelWithString:
-      @"By selecting a Xiaomi (MiMo) model, you voluntarily consent to "
-      @"Xiaomi collecting your personal information and voice data. Koe "
-      @"collects nothing and runs no servers. For any questions, please "
-      @"contact the Xiaomi team."];
+      @"选择小米 MiMo 服务即表示你同意小米收集必要的个人信息和语音数据。"
+      @"Koe 不收集数据，也不运行服务端；如有疑问请联系小米。"];
   mimoPrivacyNotice.font = [NSFont systemFontOfSize:11];
   // Measured height so the full notice is always visible; sits below the
   // test result row, growing downward. All provider notes share the same
@@ -1581,9 +1556,8 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   // DoubaoIME note — the built-in provider needs no setup at all, but it is
   // a cloud service; make both facts explicit right under the provider row.
   NSTextField *doubaoImeNote = [NSTextField wrappingLabelWithString:
-      @"No configuration needed — no API key or account required. "
-      @"Recognition runs on a built-in free cloud service, so an active "
-      @"network connection is required while dictating."];
+      @"无需配置：不需要 API 密钥或账号。识别由免费的在线服务完成，"
+      @"使用时需要保持网络连接。"];
   doubaoImeNote.font = [NSFont systemFontOfSize:11];
   // Same orange as the other provider notes — one visual voice for all of
   // them (the user-visible convention: orange text = provider caveat).
@@ -1636,7 +1610,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
 
   // Language popup (Doubao + DoubaoIME)
   CGFloat langY = testResultY - rowH;
-  NSTextField *langLabel = [self formLabel:@"Language"
+  NSTextField *langLabel = [self formLabel:@"语言"
                                      frame:NSMakeRect(formX, langY, labelW, 22)];
   langLabel.tag = 1008;
   langLabel.hidden = YES;
@@ -1667,10 +1641,10 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.asrLanguagePopup.hidden = YES;
   [pane addSubview:self.asrLanguagePopup];
 
-  // Advanced Settings toggle button (Doubao only)
+  // 高级设置开关（仅豆包服务）
   CGFloat advY = langY - rowH;
   self.asrAdvancedDisclosure =
-      [NSButton checkboxWithTitle:@"Advanced Settings"
+      [NSButton checkboxWithTitle:@"高级设置"
                            target:self
                            action:@selector(asrAdvancedToggled:)];
   self.asrAdvancedDisclosure.frame = NSMakeRect(fieldX, advY, 200, 22);
@@ -1687,9 +1661,9 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.asrAdvancedContainer.hidden = YES;
   [pane addSubview:self.asrAdvancedContainer];
 
-  // Advanced row 1: Endpoint Silence
+  // 高级设置：断句等待
   CGFloat advRowY = rowH * 2;
-  NSTextField *endLabel = [self formLabel:@"Endpoint Silence"
+  NSTextField *endLabel = [self formLabel:@"断句等待"
                                     frame:NSMakeRect(formX, advRowY, labelW, 22)];
   [self.asrAdvancedContainer addSubview:endLabel];
   self.asrEndWindowField =
@@ -1704,29 +1678,29 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   endUnit.textColor = [NSColor secondaryLabelColor];
   [self.asrAdvancedContainer addSubview:endUnit];
 
-  // Advanced row 2: Output Variant
+  // 高级设置：输出格式
   advRowY -= rowH;
   NSTextField *variantLabel =
-      [self formLabel:@"Output Variant"
+      [self formLabel:@"输出格式"
                 frame:NSMakeRect(formX, advRowY, labelW, 22)];
   [self.asrAdvancedContainer addSubview:variantLabel];
   self.asrOutputVariantPopup = [[NSPopUpButton alloc]
       initWithFrame:NSMakeRect(fieldX, advRowY - 2, 160, 26)
           pullsDown:NO];
-  [self.asrOutputVariantPopup addItemWithTitle:@"Simplified"];
+  [self.asrOutputVariantPopup addItemWithTitle:@"简体中文"];
   [self.asrOutputVariantPopup lastItem].representedObject = @"";
-  [self.asrOutputVariantPopup addItemWithTitle:@"Traditional"];
+  [self.asrOutputVariantPopup addItemWithTitle:@"繁体中文"];
   [self.asrOutputVariantPopup lastItem].representedObject = @"traditional";
-  [self.asrOutputVariantPopup addItemWithTitle:@"Taiwan"];
+  [self.asrOutputVariantPopup addItemWithTitle:@"台湾用字"];
   [self.asrOutputVariantPopup lastItem].representedObject = @"tw";
-  [self.asrOutputVariantPopup addItemWithTitle:@"Hong Kong"];
+  [self.asrOutputVariantPopup addItemWithTitle:@"香港用字"];
   [self.asrOutputVariantPopup lastItem].representedObject = @"hk";
   [self.asrAdvancedContainer addSubview:self.asrOutputVariantPopup];
 
-  // Advanced row 3: Accelerate First Character
+  // 高级设置：首字加速
   advRowY -= rowH;
   self.asrAccelerateCheckbox = [NSButton
-      checkboxWithTitle:@"Accelerate first character (may reduce accuracy)"
+      checkboxWithTitle:@"首字加速（可能降低准确率）"
                  target:nil
                  action:nil];
   self.asrAccelerateCheckbox.frame = NSMakeRect(fieldX, advRowY, fieldW, 22);
@@ -2284,10 +2258,8 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   CGFloat contentX = SPTheme.pageMargin;
   CGFloat contentW = paneWidth - 2.0 * contentX;
   NSString *descriptionText =
-      @"Adjust the bottom live transcript overlay. Choose a system font, tune "
-      @"text size, set the bottom distance, and decide whether long live text "
-      @"stays capped to a few lines or expands fully. Every change is "
-      @"previewed directly in the real desktop overlay position.";
+      @"调整语音识别悬浮窗的字体、大小和位置，并设置实时文字的显示行数。"
+      @"所有改动都会直接在桌面悬浮窗中预览。";
 
   self.overlayFontFamilyPopup = [self overlayFontFamilyPopupControl];
 
@@ -2314,27 +2286,31 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.overlayLimitVisibleLinesSwitch =
       [self settingsSwitchWithAction:@selector(overlayControlChanged:)];
   self.overlayMaxVisibleLinesPopup = [self overlayMaxVisibleLinesPopupControl];
+  self.stripTrailingPunctuationSwitch =
+      [self settingsSwitchWithAction:@selector(overlayControlChanged:)];
 
   NSButton *resetButton =
-      [NSButton buttonWithTitle:@"Reset to Default"
+      [NSButton buttonWithTitle:@"恢复默认"
                          target:self
                          action:@selector(resetOverlaySettings:)];
   resetButton.bezelStyle = NSBezelStyleRounded;
   resetButton.frame = NSMakeRect(0, 0, 126.0, 28.0);
 
   NSView *controlsCard = [self
-      cardWithTitle:@"Style Controls"
+      cardWithTitle:@"显示设置"
                rows:@[
-                 [self cardRowWithLabel:@"Font"
+                 [self cardRowWithLabel:@"字体"
                                 control:self.overlayFontFamilyPopup],
-                 [self cardRowWithLabel:@"Text Size" control:fontSliderControl],
-                 [self cardRowWithLabel:@"Distance from Bottom"
+                 [self cardRowWithLabel:@"文字大小" control:fontSliderControl],
+                 [self cardRowWithLabel:@"距底部距离"
                                 control:bottomSliderControl],
-                 [self cardRowWithLabel:@"Limit Visible Lines"
+                 [self cardRowWithLabel:@"限制实时显示行数"
                                 control:self.overlayLimitVisibleLinesSwitch],
-                 [self cardRowWithLabel:@"Max Visible Lines"
+                 [self cardRowWithLabel:@"最多显示行数"
                                 control:self.overlayMaxVisibleLinesPopup],
-                 [self cardRowWithLabel:@"Defaults" control:resetButton],
+                 [self cardRowWithLabel:@"句末去除标点"
+                                control:self.stripTrailingPunctuationSwitch],
+                 [self cardRowWithLabel:@"恢复默认" control:resetButton],
                ]
               width:contentW];
   CGFloat descriptionHeight = [self
@@ -2440,6 +2416,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.overlayLimitVisibleLinesSwitch.state = kOverlayLimitVisibleLinesDefault
                                                   ? NSControlStateValueOn
                                                   : NSControlStateValueOff;
+  self.stripTrailingPunctuationSwitch.state = NSControlStateValueOff;
   [self selectOverlayMaxVisibleLinesValue:kOverlayMaxVisibleLinesDefault];
   [self syncOverlayPreviewFromControls];
 }
@@ -2455,21 +2432,21 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.hotkeyPopup.target = self;
   self.hotkeyPopup.action = @selector(triggerHotkeyChanged:);
   self.recordTriggerHotkeyButton =
-      [NSButton buttonWithTitle:@"Record"
+      [NSButton buttonWithTitle:@"录制"
                          target:self
                          action:@selector(recordTriggerHotkey:)];
   self.recordTriggerHotkeyButton.bezelStyle = NSBezelStyleRounded;
-  // Wide enough for both runtime titles ("Record" / "Press...")
-  self.recordTriggerHotkeyButton.title = @"Press...";
+  // Wide enough for both runtime titles ("录制" / "请按键…")
+  self.recordTriggerHotkeyButton.title = @"请按键…";
   [self.recordTriggerHotkeyButton sizeToFit];
   CGFloat recordButtonW = self.recordTriggerHotkeyButton.frame.size.width;
-  self.recordTriggerHotkeyButton.title = @"Record";
+  self.recordTriggerHotkeyButton.title = @"录制";
   [self.recordTriggerHotkeyButton sizeToFit];
   recordButtonW =
       MAX(recordButtonW, self.recordTriggerHotkeyButton.frame.size.width);
   self.recordTriggerHotkeyButton.frame = NSMakeRect(0, 0, recordButtonW, 28);
   self.resetTriggerHotkeyButton =
-      [NSButton buttonWithTitle:@"Reset"
+      [NSButton buttonWithTitle:@"重置"
                          target:self
                          action:@selector(resetTriggerHotkey:)];
   self.resetTriggerHotkeyButton.bezelStyle = NSBezelStyleRounded;
@@ -2484,9 +2461,9 @@ static NSString *SPCondensedProviderError(NSString *raw) {
       [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 220, 26)
                                  pullsDown:NO];
   [self.triggerModePopup addItemsWithTitles:@[
-    @"Hold (Press & Hold)",
-    @"Toggle (Tap to Start/Stop)",
-    @"DoubleTap",
+    @"按住说话",
+    @"点按开始/停止",
+    @"双击开始",
   ]];
   [self.triggerModePopup itemAtIndex:0].representedObject = @"hold";
   [self.triggerModePopup itemAtIndex:1].representedObject = @"toggle";
@@ -2494,11 +2471,11 @@ static NSString *SPCondensedProviderError(NSString *raw) {
 
   // ── Trigger card ──
   NSView *triggerCard =
-      [self cardWithTitle:@"Trigger"
+      [self cardWithTitle:@"触发方式"
                      rows:@[
-                       [self cardRowWithLabel:@"Trigger Shortcut"
+                       [self cardRowWithLabel:@"触发快捷键"
                                       control:triggerShortcutControl],
-                       [self cardRowWithLabel:@"Trigger Mode"
+                       [self cardRowWithLabel:@"触发模式"
                                       control:self.triggerModePopup],
                      ]
                     width:cardWidth];
@@ -2507,9 +2484,9 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.autoReturnSwitch = [self settingsSwitchWithAction:NULL];
 
   NSView *pasteCard =
-      [self cardWithTitle:@"Paste Behavior"
+      [self cardWithTitle:@"粘贴行为"
                      rows:@[
-                       [self cardRowWithLabel:@"Press Return after paste"
+                       [self cardRowWithLabel:@"粘贴后按回车"
                                       control:self.autoReturnSwitch],
                      ]
                     width:cardWidth];
@@ -2520,13 +2497,13 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.errorSoundCheckbox = [self settingsSwitchWithAction:NULL];
 
   NSView *feedbackCard =
-      [self cardWithTitle:@"Feedback Sounds"
+      [self cardWithTitle:@"提示音"
                      rows:@[
-                       [self cardRowWithLabel:@"Recording starts"
+                       [self cardRowWithLabel:@"开始录音"
                                       control:self.startSoundCheckbox],
-                       [self cardRowWithLabel:@"Recording stops"
+                       [self cardRowWithLabel:@"结束录音"
                                       control:self.stopSoundCheckbox],
-                       [self cardRowWithLabel:@"Error occurs"
+                       [self cardRowWithLabel:@"发生错误"
                                       control:self.errorSoundCheckbox],
                      ]
                     width:cardWidth];
@@ -2534,9 +2511,9 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   // ── Recording ──
   self.muteSystemOutputCheckbox = [self settingsSwitchWithAction:NULL];
   NSView *recordingCard =
-      [self cardWithTitle:@"Recording"
+      [self cardWithTitle:@"录音"
                      rows:@[
-                       [self cardRowWithLabel:@"Mute system audio while recording"
+                       [self cardRowWithLabel:@"录音时静音系统输出"
                                       control:self.muteSystemOutputCheckbox],
                      ]
                     width:cardWidth];
@@ -2597,13 +2574,13 @@ static NSString *SPCondensedProviderError(NSString *raw) {
       [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 168, 26)
                                  pullsDown:NO];
   NSArray<NSString *> *titles = @[
-    @"Fn (Globe)",
-    @"Left Option (\u2325)",
-    @"Right Option (\u2325)",
-    @"Left Command (\u2318)",
-    @"Right Command (\u2318)",
-    @"Left Control (\u2303)",
-    @"Right Control (\u2303)",
+    @"Fn（地球键）",
+    @"左 Option（\u2325）",
+    @"右 Option（\u2325）",
+    @"左 Command（\u2318）",
+    @"右 Command（\u2318）",
+    @"左 Control（\u2303）",
+    @"右 Control（\u2303）",
   ];
   NSArray<NSString *> *values = @[
     @"fn",
@@ -2706,7 +2683,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   self.recordTriggerHotkeyButton.enabled = YES;
   self.resetTriggerHotkeyButton.enabled = !recordingTrigger;
   [self.recordTriggerHotkeyButton
-      setTitle:(recordingTrigger ? @"Press..." : @"Record")];
+      setTitle:(recordingTrigger ? @"请按键…" : @"录制")];
 }
 
 - (NSString *)recordedHotkeyValueFromEvent:(NSEvent *)event {
@@ -2820,16 +2797,15 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   // Description
   NSTextField *desc =
       [self addSettingsDescriptionText:
-                @"User dictionary \u2014 one term per line. These terms are "
-                @"prioritized during LLM correction. Lines starting with # are "
-                @"comments."
+                @"用户词典：每行填写一个词语。在线识别服务会使用这些词语帮助识别，"
+                @"以 # 开头的行会被视为注释。"
                                 toPane:pane
                                   topY:y
                                      x:contentX
                                  width:contentW];
 
   NSTextField *sectionTitle = [self
-      sectionTitleLabel:@"Dictionary"
+      sectionTitleLabel:@"词典"
                   frame:NSMakeRect(contentX, floor(NSMinY(desc.frame) - 36.0),
                                    contentW, 20)];
   [pane addSubview:sectionTitle];
@@ -3734,9 +3710,8 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   CGFloat paneWidth = [self paneContentWidth];
   // Measure the description first — the pane height grows to fit it.
   NSTextField *desc = [self
-      descriptionLabel:@"A background-first macOS voice input tool.\nPress a "
-                       @"hotkey, speak, and the corrected text is pasted into "
-                       @"whatever app you’re using."];
+      descriptionLabel:@"一款 macOS 语音输入工具。\n按下快捷键，说完话，"
+                       @"识别出的文字就会粘贴到当前使用的应用中。"];
   desc.alignment = NSTextAlignmentCenter;
   CGFloat descH = [self fittingHeightForWrappingLabel:desc
                                                 width:paneWidth - 120];
@@ -3811,7 +3786,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
       [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"]
           ?: @"0";
   NSTextField *versionLabel =
-      [self descriptionLabel:[NSString stringWithFormat:@"Version %@ (%@)",
+      [self descriptionLabel:[NSString stringWithFormat:@"版本 %@（%@）",
                                                         version, build]];
   versionLabel.alignment = NSTextAlignmentCenter;
   versionLabel.frame = NSMakeRect(24, y, paneWidth - 48, 20);
@@ -3824,7 +3799,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   y = NSMinY(desc.frame) - 46;
 
   // GitHub button
-  NSButton *githubButton = [NSButton buttonWithTitle:@"GitHub Repository"
+  NSButton *githubButton = [NSButton buttonWithTitle:@"GitHub 项目主页"
                                               target:self
                                               action:@selector(openGitHub:)];
   githubButton.bezelStyle = NSBezelStyleRounded;
@@ -3836,7 +3811,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
   y -= 40;
 
   // Documentation link
-  NSButton *docsButton = [NSButton buttonWithTitle:@"Documentation"
+  NSButton *docsButton = [NSButton buttonWithTitle:@"使用文档"
                                             target:self
                                             action:@selector(openDocs:)];
   docsButton.bezelStyle = NSBezelStyleRounded;
@@ -3849,7 +3824,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
 
   // License
   NSTextField *license = [self
-      descriptionLabel:@"MIT License \u00b7 Made with Rust + Objective-C"];
+      descriptionLabel:@"MIT 许可证 · Rust + Objective-C 构建"];
   license.alignment = NSTextAlignmentCenter;
   license.frame = NSMakeRect(24, y, paneWidth - 48, 20);
   [pane addSubview:license];
@@ -3857,7 +3832,7 @@ static NSString *SPCondensedProviderError(NSString *raw) {
 
   // Contributors (pre-measured above)
   NSTextField *contributorsTitle = [self
-      descriptionLabel:@"Thanks to everyone who has contributed to Koe ❤️"];
+      descriptionLabel:@"感谢所有为 Koe 做出贡献的人 ❤️"];
   contributorsTitle.alignment = NSTextAlignmentCenter;
   contributorsTitle.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
   contributorsTitle.frame = NSMakeRect(24, y, paneWidth - 48, 16);
@@ -4545,9 +4520,6 @@ static const CGFloat kAsrStatusStripHeight = 34.0;
   BOOL isQwen = [selectedProvider isEqualToString:@"qwen"];
   BOOL isGlm = [selectedProvider isEqualToString:@"glm"];
   BOOL isMimo = [selectedProvider isEqualToString:@"mimo"];
-  BOOL isAppleSpeech = [selectedProvider isEqualToString:@"apple-speech"];
-  BOOL isModelBasedLocal =
-      !isDoubaoIme && !isDoubao && !isQwen && !isGlm && !isMimo && !isAppleSpeech;
 
   // Show/hide Doubao auth mode control and credential fields
   [self setHidden:!isDoubao
@@ -4631,58 +4603,14 @@ static const CGFloat kAsrStatusStripHeight = 34.0;
   self.asrMimoApiKeySecureField.hidden = !isMimo;
   self.asrMimoApiKeyToggle.hidden = !isMimo;
 
-  // Show/hide Apple Speech locale popup and asset status
-  self.appleSpeechLocalePopup.hidden = !isAppleSpeech;
-  [self setHidden:!isAppleSpeech
-      forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1005]
-                    inView:self.currentPaneView];
-
-  // Show/hide local model popup, status, and download button
-  self.localModelPopup.hidden = !isModelBasedLocal;
-  if (!isModelBasedLocal && !isAppleSpeech) {
-    self.modelStatusLabel.hidden = YES;
-    self.modelDownloadButton.hidden = YES;
-    self.modelDeleteButton.hidden = YES;
-    self.modelProgressBar.hidden = YES;
-    self.modelProgressSizeLabel.hidden = YES;
-  } else if (isAppleSpeech) {
-    // Reuse model status row for Apple Speech asset status
-    self.modelStatusLabel.hidden = NO;
-    self.modelDownloadButton.hidden = NO;
-    self.modelDeleteButton.hidden = NO;
-    self.modelProgressBar.hidden = YES;
-    self.modelProgressSizeLabel.hidden = YES;
-    [self updateAppleSpeechAssetStatus];
-  } else {
-    self.modelStatusLabel.hidden = NO;
-    self.modelDownloadButton.hidden = NO;
-    self.modelDeleteButton.hidden = NO;
-    self.modelProgressBar.hidden = YES;
-    self.modelProgressSizeLabel.hidden = YES;
-    [self updateModelStatusLabel];
-  }
-  [self setHidden:!isModelBasedLocal
-      forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1004]
-                    inView:self.currentPaneView];
-  if (isModelBasedLocal) {
-    [self populateLocalModelPopup:selectedProvider mode:@"asr"];
-    [self updateModelStatusLabel];
-  }
-
-  // Provider-specific notes: DoubaoIME's no-configuration note and WeType's
-  // Chinese-only note.
+  // Provider-specific note: DoubaoIME's no-configuration note.
   [self setHidden:!isDoubaoIme
       forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1012]
                     inView:self.currentPaneView];
-  BOOL isWetype = [selectedProvider isEqualToString:@"wetype"];
-  [self setHidden:!isWetype
-      forViewsMatchingTags:[NSIndexSet indexSetWithIndex:1013]
-                    inView:self.currentPaneView];
 
-  // Hide test button for local providers (no remote connection to test)
-  BOOL isLocal = !isDoubaoIme && !isDoubao && !isQwen && !isGlm && !isMimo;
-  self.asrTestButton.hidden = isLocal;
-  self.asrTestResultLabel.hidden = isLocal;
+  // Every provider in this build is online and can be tested from this pane.
+  self.asrTestButton.hidden = NO;
+  self.asrTestResultLabel.hidden = NO;
 
   // Clear test result when switching provider
   self.asrTestResultLabel.stringValue = @"";
@@ -5747,6 +5675,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
     NSString *bottomMarginRaw = configGet(@"overlay.bottom_margin");
     NSString *limitVisibleLinesRaw = configGet(@"overlay.limit_visible_lines");
     NSString *maxVisibleLinesRaw = configGet(@"overlay.max_visible_lines");
+    NSString *stripTrailingPunctuationRaw =
+        configGet(@"output.strip_trailing_punctuation");
     NSString *fontFamily = fontFamilyRaw.length > 0
                                ? normalizedOverlayFontFamilyValue(fontFamilyRaw)
                                : kOverlayFontFamilyDefault;
@@ -5764,6 +5694,8 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
                                     ? clampedOverlayMaxVisibleLinesValue(
                                           maxVisibleLinesRaw.integerValue)
                                     : kOverlayMaxVisibleLinesDefault;
+    BOOL stripTrailingPunctuation = configBooleanValue(
+        stripTrailingPunctuationRaw, NO);
 
     [self selectOverlayFontFamilyValue:fontFamily];
     self.overlayFontSizeSlider.integerValue = fontSize;
@@ -5773,6 +5705,10 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
     [self rememberLoadedBooleanValue:limitVisibleLines
                               forKey:@"overlay.limit_visible_lines"];
     [self selectOverlayMaxVisibleLinesValue:maxVisibleLines];
+    self.stripTrailingPunctuationSwitch.state =
+        stripTrailingPunctuation ? NSControlStateValueOn : NSControlStateValueOff;
+    [self rememberLoadedBooleanValue:stripTrailingPunctuation
+                              forKey:@"output.strip_trailing_punctuation"];
     [self syncOverlayPreviewFromControls];
   } else if ([identifier isEqualToString:kToolbarHotkey]) {
     NSString *triggerKeyRaw = configGet(@"hotkey.trigger_key");
@@ -6127,6 +6063,13 @@ static void appleSpeechInstallCallback(void *ctx, int32_t eventType,
     saveOk &=
         configSet(@"overlay.max_visible_lines",
                   [NSString stringWithFormat:@"%ld", (long)maxVisibleLines]);
+    BOOL stripTrailingPunctuation =
+        self.stripTrailingPunctuationSwitch.state == NSControlStateValueOn;
+    if ([self shouldPersistBooleanValue:stripTrailingPunctuation
+                                 forKey:@"output.strip_trailing_punctuation"]) {
+      saveOk &= configSet(@"output.strip_trailing_punctuation",
+                          stripTrailingPunctuation ? @"true" : @"false");
+    }
   }
   if (self.startSoundCheckbox) {
     NSString *startSound =

@@ -7,7 +7,6 @@ typedef NS_ENUM(NSInteger, SPPermissionType) {
     SPPermissionTypeMicrophone = 0,
     SPPermissionTypeAccessibility,
     SPPermissionTypeInputMonitoring,
-    SPPermissionTypeSpeechRecognition,
 };
 
 @interface SPPermissionManager : NSObject
@@ -17,12 +16,6 @@ typedef NS_ENUM(NSInteger, SPPermissionType) {
 - (BOOL)isAccessibilityGranted;
 - (void)requestAccessibilityPermission;
 - (BOOL)isInputMonitoringGranted;
-
-/// Check whether speech recognition permission has been granted.
-- (BOOL)isSpeechRecognitionGranted;
-
-/// Request speech recognition permission from the user.
-- (void)requestSpeechRecognitionPermissionWithCompletion:(void (^)(BOOL granted))completion;
 
 /// Request notification permission from the user.
 - (void)requestNotificationPermission;

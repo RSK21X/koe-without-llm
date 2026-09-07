@@ -38,8 +38,6 @@
 //! # }
 //! ```
 
-#[cfg(feature = "apple-speech")]
-pub mod apple_speech;
 pub mod config;
 pub mod doubao;
 pub mod doubaoime;
@@ -48,18 +46,10 @@ pub mod error;
 pub mod event;
 pub mod glm;
 pub mod mimo;
-#[cfg(feature = "mlx")]
-pub mod mlx;
 pub mod provider;
 pub mod qwen;
-#[cfg(feature = "sherpa-onnx")]
-pub mod sherpa_onnx;
 pub mod transcript;
-#[cfg(feature = "wetype-offline")]
-pub mod wetype;
 
-#[cfg(feature = "apple-speech")]
-pub use apple_speech::{AppleSpeechConfig, AppleSpeechProvider};
 pub use config::AsrConfig;
 pub use doubao::DoubaoWsProvider;
 pub use doubaoime::DoubaoImeProvider;
@@ -67,12 +57,6 @@ pub use error::AsrError;
 pub use event::AsrEvent;
 pub use glm::GlmAsrProvider;
 pub use mimo::MimoAsrProvider;
-#[cfg(feature = "mlx")]
-pub use mlx::{MlxConfig, MlxProvider};
 pub use provider::AsrProvider;
 pub use qwen::QwenAsrProvider;
-#[cfg(feature = "sherpa-onnx")]
-pub use sherpa_onnx::{SherpaOnnxConfig, SherpaOnnxProvider};
 pub use transcript::TranscriptAggregator;
-#[cfg(feature = "wetype-offline")]
-pub use wetype::{ensure_model, model_present, ModelAsset, WeTypeModelSpec, WeTypeOfflineProvider};

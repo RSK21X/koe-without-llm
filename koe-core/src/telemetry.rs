@@ -8,8 +8,6 @@ pub struct SessionMetrics {
     pub asr_connect_start: Option<Instant>,
     pub asr_connected: Option<Instant>,
     pub asr_final_received: Option<Instant>,
-    pub llm_start: Option<Instant>,
-    pub llm_end: Option<Instant>,
     pub paste_done: Option<Instant>,
     pub clipboard_restored: Option<Instant>,
     pub error_type: Option<String>,
@@ -25,8 +23,6 @@ impl SessionMetrics {
             asr_connect_start: None,
             asr_connected: None,
             asr_final_received: None,
-            llm_start: None,
-            llm_end: None,
             paste_done: None,
             clipboard_restored: None,
             error_type: None,
@@ -53,18 +49,16 @@ impl SessionMetrics {
         Self::duration_ms(self.hotkey_end, self.asr_final_received)
     }
 
-    pub fn llm_duration_ms(&self) -> Option<u64> {
-        Self::duration_ms(self.llm_start, self.llm_end)
-    }
-
     pub fn summary(&self) -> String {
         format!(
-            "session={} recording={}ms asr_connect={}ms asr_finalize={}ms llm={}ms pasted={} error={:?}",
+            "session={} recording={}ms asr_connect={}ms asr_finalize={}ms pasted={} error={:?}",
             self.session_id,
-            self.recording_duration_ms().map_or("?".into(), |v| v.to_string()),
-            self.asr_connect_duration_ms().map_or("?".into(), |v| v.to_string()),
-            self.asr_finalize_duration_ms().map_or("?".into(), |v| v.to_string()),
-            self.llm_duration_ms().map_or("?".into(), |v| v.to_string()),
+            self.recording_duration_ms()
+                .map_or("?".into(), |v| v.to_string()),
+            self.asr_connect_duration_ms()
+                .map_or("?".into(), |v| v.to_string()),
+            self.asr_finalize_duration_ms()
+                .map_or("?".into(), |v| v.to_string()),
             self.auto_pasted,
             self.error_type,
         )

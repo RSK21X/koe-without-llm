@@ -43,7 +43,6 @@ base64 = "0.22"
 flate2 = "1.1"
 md-5 = "0.10"
 rustls = { version = "0.23", default-features = false }
-sherpa-onnx = "1.12"
 tokio-tungstenite = "0.24"
 # Same parser reqwest uses internally; endpoint validation must judge the
 # URL exactly as it will be fetched.
@@ -53,10 +52,6 @@ url = "2.5"
 cbindgen = "0.27"
 env_logger = "0.11"
 serde_yaml = "0.9"
-sha2 = "0.10"
-tokio-util = "0.7"
-urlencoding = "2.1"
 
 # koe-cli
 clap = "4.6"
-indicatif = "0.17"
