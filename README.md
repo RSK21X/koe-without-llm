@@ -22,11 +22,12 @@
 ## 从源码编译
 
 ```bash
-git clone https://github.com/missuo/koe.git
-cd koe
-cd KoeApp && xcodegen generate && cd ..
+git clone https://github.com/RSK21X/koe-without-llm.git
+cd koe-without-llm
 make build
 ```
+
+`make build` 会自动生成 Xcode 项目、编译 Rust 和 macOS 应用，并将命令行组件放入应用包中。
 
 编译后的应用通常位于：
 
