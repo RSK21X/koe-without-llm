@@ -2,6 +2,14 @@
 
 All notable user-facing changes to Koe are documented here.
 
+## 1.0.33 - 2026-09-07
+
+### Changed
+
+- Removed the in-app automatic update feature and its Sparkle dependencies.
+- Added the fork owner's GitHub profile link to the About page while retaining the original project link.
+- Simplified the release pipeline to publish manual GitHub Releases.
+
 ## 1.0.32 - 2026-08-31
 
 ### Fixed
