@@ -13,15 +13,51 @@ typedef NS_ENUM(NSInteger, SPRecorderVisualState) {
     SPRecorderVisualStateError,
 };
 
-// Compact, accessory-scale geometry. The goal is closer to Aqua / Monologue:
-// visible when useful, never visually dominant.
 static const CGFloat kListeningWidth = 304.0;
 static const CGFloat kListeningHeight = 46.0;
 static const CGFloat kExpandedWidth = 432.0;
-static const CGFloat kExpandedHeight = 48.0;
-static const CGFloat kBottomMargin = 14.0;
+static const CGFloat kExpandedBaseHeight = 48.0;
+static const CGFloat kDefaultBottomMargin = 14.0;
+static const CGFloat kDefaultTextFontSize = 13.0;
+static const NSInteger kDefaultMaxVisibleLines = 3;
 static const NSInteger kWaveBarCount = 11;
 static const void *kRecorderViewKey = &kRecorderViewKey;
+static const void *kRecorderPreviewKey = &kRecorderPreviewKey;
+
+static CGFloat SPRecorderClampFontSize(CGFloat value) {
+    return fmin(28.0, fmax(12.0, value));
+}
+
+static CGFloat SPRecorderClampBottomMargin(CGFloat value) {
+    return fmin(180.0, fmax(0.0, value));
+}
+
+static NSInteger SPRecorderClampMaxLines(NSInteger value) {
+    return MAX(3, MIN(5, value));
+}
+
+static NSFont *SPRecorderFont(NSString *family, CGFloat size) {
+    CGFloat resolvedSize = SPRecorderClampFontSize(size);
+    NSString *trimmed = [[family ?: @"" stringByTrimmingCharactersInSet:
+        NSCharacterSet.whitespaceAndNewlineCharacterSet] copy];
+    if (trimmed.length == 0 || [trimmed caseInsensitiveCompare:@"system"] == NSOrderedSame) {
+        return [NSFont systemFontOfSize:resolvedSize weight:NSFontWeightMedium];
+    }
+
+    NSFont *font = [NSFont fontWithName:trimmed size:resolvedSize];
+    if (font) return font;
+
+    font = [[NSFontManager sharedFontManager] fontWithFamily:trimmed
+                                                      traits:0
+                                                      weight:5
+                                                        size:resolvedSize];
+    return font ?: [NSFont systemFontOfSize:resolvedSize weight:NSFontWeightMedium];
+}
+
+static CGFloat SPRecorderLineHeight(NSFont *font) {
+    if (!font) return ceil(kDefaultTextFontSize * 1.25);
+    return ceil(font.ascender - font.descender + font.leading);
+}
 
 static void SPSetEllipsePath(CAShapeLayer *layer) {
     CGPathRef path = CGPathCreateWithEllipseInRect(layer.bounds, NULL);
@@ -53,7 +89,18 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
 @property (nonatomic, strong) NSMutableArray<CALayer *> *levelDots;
 @property (nonatomic, strong) NSMutableArray<NSNumber *> *history;
 @property (nonatomic, assign) CGFloat smoothedLevel;
+@property (nonatomic, assign) CGFloat transcriptFontSize;
+@property (nonatomic, copy) NSString *transcriptFontFamily;
+@property (nonatomic, assign) CGFloat bottomMargin;
+@property (nonatomic, assign) BOOL limitVisibleLines;
+@property (nonatomic, assign) NSInteger maxVisibleLines;
 - (void)applyVisualState:(SPRecorderVisualState)state;
+- (void)applyAppearanceWithFontSize:(CGFloat)fontSize
+                         fontFamily:(NSString *)fontFamily
+                       bottomMargin:(CGFloat)bottomMargin
+                  limitVisibleLines:(BOOL)limitVisibleLines
+                    maxVisibleLines:(NSInteger)maxVisibleLines;
+- (CGFloat)preferredHeightForWidth:(CGFloat)width;
 - (void)updateAudioLevel:(CGFloat)level;
 - (void)updateTranscript:(NSString *)text;
 - (void)showBadge:(NSString *)text;
@@ -67,34 +114,34 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
 
     self.wantsLayer = YES;
     self.layer.backgroundColor = NSColor.clearColor.CGColor;
-    self.layer.masksToBounds = NO;
-    self.layer.shadowColor = NSColor.blackColor.CGColor;
-    self.layer.shadowOpacity = 0.15;
-    self.layer.shadowRadius = 7.0;
-    self.layer.shadowOffset = CGSizeMake(0.0, -1.5);
+    self.layer.masksToBounds = YES;
+
+    _transcriptFontSize = kDefaultTextFontSize;
+    _transcriptFontFamily = @"system";
+    _bottomMargin = kDefaultBottomMargin;
+    _limitVisibleLines = YES;
+    _maxVisibleLines = kDefaultMaxVisibleLines;
 
     _bodyGradient = [CAGradientLayer layer];
-    // Subtle warm aluminium instead of a high-contrast "hardware slab".
     _bodyGradient.colors = @[
-        (__bridge id)[NSColor colorWithWhite:0.945 alpha:1.0].CGColor,
-        (__bridge id)[NSColor colorWithWhite:0.885 alpha:1.0].CGColor,
-        (__bridge id)[NSColor colorWithWhite:0.925 alpha:1.0].CGColor,
+        (__bridge id)[NSColor colorWithWhite:0.955 alpha:1.0].CGColor,
+        (__bridge id)[NSColor colorWithWhite:0.905 alpha:1.0].CGColor,
+        (__bridge id)[NSColor colorWithWhite:0.935 alpha:1.0].CGColor,
     ];
-    _bodyGradient.locations = @[@0.0, @0.54, @1.0];
+    _bodyGradient.locations = @[@0.0, @0.52, @1.0];
     _bodyGradient.startPoint = CGPointMake(0.0, 0.0);
     _bodyGradient.endPoint = CGPointMake(1.0, 1.0);
-    _bodyGradient.masksToBounds = YES;
     [self.layer addSublayer:_bodyGradient];
 
     _bodyBorder = [CAShapeLayer layer];
     _bodyBorder.fillColor = NSColor.clearColor.CGColor;
-    _bodyBorder.strokeColor = [NSColor colorWithWhite:0.10 alpha:0.16].CGColor;
+    _bodyBorder.strokeColor = [NSColor colorWithWhite:0.08 alpha:0.14].CGColor;
     _bodyBorder.lineWidth = 0.75;
     [self.layer addSublayer:_bodyBorder];
 
     _buttonDisc = [CAShapeLayer layer];
-    _buttonDisc.fillColor = [NSColor colorWithWhite:0.075 alpha:0.98].CGColor;
-    _buttonDisc.strokeColor = [NSColor colorWithWhite:0.0 alpha:0.30].CGColor;
+    _buttonDisc.fillColor = [NSColor colorWithWhite:0.055 alpha:0.98].CGColor;
+    _buttonDisc.strokeColor = [NSColor colorWithWhite:0.0 alpha:0.28].CGColor;
     _buttonDisc.lineWidth = 0.75;
     [self.layer addSublayer:_buttonDisc];
 
@@ -105,8 +152,8 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
     [self.layer addSublayer:_buttonGlyph];
 
     _knobDisc = [CAShapeLayer layer];
-    _knobDisc.fillColor = [NSColor colorWithWhite:0.82 alpha:1.0].CGColor;
-    _knobDisc.strokeColor = [NSColor colorWithWhite:0.18 alpha:0.72].CGColor;
+    _knobDisc.fillColor = [NSColor colorWithWhite:0.83 alpha:1.0].CGColor;
+    _knobDisc.strokeColor = [NSColor colorWithWhite:0.16 alpha:0.62].CGColor;
     _knobDisc.lineWidth = 0.8;
     [self.layer addSublayer:_knobDisc];
 
@@ -116,22 +163,24 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
 
     _timeLabel = [NSTextField labelWithString:@"0:00"];
     _timeLabel.font = [NSFont monospacedDigitSystemFontOfSize:12.5 weight:NSFontWeightMedium];
-    _timeLabel.textColor = [NSColor colorWithWhite:0.10 alpha:0.94];
+    _timeLabel.textColor = [NSColor colorWithWhite:0.08 alpha:0.94];
     _timeLabel.alignment = NSTextAlignmentLeft;
     _timeLabel.lineBreakMode = NSLineBreakByClipping;
     [self addSubview:_timeLabel];
 
     _textLabel = [NSTextField labelWithString:@""];
-    _textLabel.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium];
-    _textLabel.textColor = [NSColor colorWithWhite:0.08 alpha:0.94];
+    _textLabel.font = SPRecorderFont(_transcriptFontFamily, _transcriptFontSize);
+    _textLabel.textColor = [NSColor colorWithWhite:0.06 alpha:0.94];
     _textLabel.alignment = NSTextAlignmentCenter;
-    _textLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-    _textLabel.maximumNumberOfLines = 1;
+    _textLabel.lineBreakMode = NSLineBreakByWordWrapping;
+    _textLabel.maximumNumberOfLines = _maxVisibleLines;
+    _textLabel.cell.wraps = YES;
+    _textLabel.cell.scrollable = NO;
     [self addSubview:_textLabel];
 
     _badgeLabel = [NSTextField labelWithString:@""];
     _badgeLabel.font = [NSFont systemFontOfSize:9.5 weight:NSFontWeightSemibold];
-    _badgeLabel.textColor = [NSColor colorWithWhite:0.22 alpha:0.72];
+    _badgeLabel.textColor = [NSColor colorWithWhite:0.18 alpha:0.68];
     _badgeLabel.alignment = NSTextAlignmentRight;
     _badgeLabel.hidden = YES;
     [self addSubview:_badgeLabel];
@@ -140,14 +189,13 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
     _history = [NSMutableArray arrayWithCapacity:kWaveBarCount];
     for (NSInteger i = 0; i < kWaveBarCount; i++) {
         CALayer *bar = [CALayer layer];
-        bar.backgroundColor = [NSColor colorWithWhite:0.11 alpha:0.82].CGColor;
+        bar.backgroundColor = [NSColor colorWithWhite:0.08 alpha:0.80].CGColor;
         bar.cornerRadius = 1.0;
         [self.layer addSublayer:bar];
         [_waveBars addObject:bar];
         [_history addObject:@0.08];
     }
 
-    // Tiny meter LEDs: just enough to keep a hint of instrument character.
     _levelDots = [NSMutableArray arrayWithCapacity:3];
     for (NSInteger i = 0; i < 3; i++) {
         CALayer *dot = [CALayer layer];
@@ -172,6 +220,19 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
 
 - (BOOL)isFlipped { return YES; }
 
+- (CGFloat)textLeftForWidth:(CGFloat)width {
+    CGFloat controlSize = self.visualState == SPRecorderVisualStateListening ? 30.0 : 32.0;
+    CGFloat leftX = 8.0;
+    CGFloat timeX = leftX + controlSize + 10.0;
+    return timeX + 61.0;
+}
+
+- (CGFloat)textRightForWidth:(CGFloat)width {
+    CGFloat controlSize = self.visualState == SPRecorderVisualStateListening ? 30.0 : 32.0;
+    CGFloat rightX = width - 8.0 - controlSize;
+    return rightX - 12.0;
+}
+
 - (void)layout {
     [super layout];
 
@@ -181,17 +242,12 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
     CGFloat cy = NSMidY(b);
     CGFloat radius = floor(height / 2.0);
 
-    // The body occupies the full view. No inset = no black rectangular gutter.
+    self.layer.cornerRadius = radius;
     self.bodyGradient.frame = NSRectToCGRect(b);
     self.bodyGradient.cornerRadius = radius;
-    self.bodyGradient.masksToBounds = YES;
 
     self.bodyBorder.frame = CGRectInset(NSRectToCGRect(b), 0.5, 0.5);
     SPSetRoundedPath(self.bodyBorder, MAX(0.0, radius - 0.5));
-
-    CGPathRef shadowPath = CGPathCreateWithRoundedRect(NSRectToCGRect(b), radius, radius, NULL);
-    self.layer.shadowPath = shadowPath;
-    CGPathRelease(shadowPath);
 
     CGFloat controlSize = self.visualState == SPRecorderVisualStateListening ? 30.0 : 32.0;
     CGFloat controlInset = 8.0;
@@ -211,13 +267,10 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
                                           2.7, 2.7);
     SPSetEllipsePath(self.knobIndicator);
 
-    // Left cluster stays compact and fixed, so text has a stable central stage.
     CGFloat timeX = leftX + controlSize + 10.0;
     self.timeLabel.frame = NSMakeRect(timeX, floor(cy - 9.0), 52.0, 18.0);
-
     self.badgeLabel.frame = NSMakeRect(width - 112.0, floor(cy - 8.0), 66.0, 16.0);
 
-    // Listening: a short live waveform, not a decorative full-width graph.
     CGFloat waveStartX = timeX + 65.0;
     CGFloat gap = 3.2;
     CGFloat barWidth = 2.2;
@@ -230,15 +283,14 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
                                             barH);
     }
 
-    // Transcribing / Complete: one centered line in the quiet middle zone.
-    CGFloat textLeft = timeX + 61.0;
-    CGFloat textRight = rightX - 12.0;
+    CGFloat textLeft = [self textLeftForWidth:width];
+    CGFloat textRight = [self textRightForWidth:width];
+    CGFloat textHeight = MAX(18.0, height - 12.0);
     self.textLabel.frame = NSMakeRect(textLeft,
-                                      floor(cy - 9.5),
+                                      floor((height - textHeight) / 2.0),
                                       MAX(0.0, textRight - textLeft),
-                                      19.0);
+                                      textHeight);
 
-    // LEDs live in the tiny edge gutter, never pushing the knob off symmetry.
     CGFloat ledX = width - 4.5;
     for (NSInteger i = 0; i < self.levelDots.count; i++) {
         self.levelDots[i].frame = CGRectMake(ledX,
@@ -323,6 +375,48 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
     [self setNeedsLayout:YES];
 }
 
+- (void)applyAppearanceWithFontSize:(CGFloat)fontSize
+                         fontFamily:(NSString *)fontFamily
+                       bottomMargin:(CGFloat)bottomMargin
+                  limitVisibleLines:(BOOL)limitVisibleLines
+                    maxVisibleLines:(NSInteger)maxVisibleLines {
+    self.transcriptFontSize = SPRecorderClampFontSize(fontSize);
+    self.transcriptFontFamily = fontFamily.length ? [fontFamily copy] : @"system";
+    self.bottomMargin = SPRecorderClampBottomMargin(bottomMargin);
+    self.limitVisibleLines = limitVisibleLines;
+    self.maxVisibleLines = SPRecorderClampMaxLines(maxVisibleLines);
+
+    self.textLabel.font = SPRecorderFont(self.transcriptFontFamily, self.transcriptFontSize);
+    self.textLabel.maximumNumberOfLines = self.limitVisibleLines ? self.maxVisibleLines : 0;
+    self.textLabel.lineBreakMode = NSLineBreakByWordWrapping;
+    self.textLabel.cell.wraps = YES;
+    self.textLabel.cell.scrollable = NO;
+    [self setNeedsLayout:YES];
+}
+
+- (CGFloat)preferredHeightForWidth:(CGFloat)width {
+    if (self.visualState == SPRecorderVisualStateListening) return kListeningHeight;
+    if (self.transcript.length == 0) return kExpandedBaseHeight;
+
+    CGFloat textWidth = MAX(40.0, [self textRightForWidth:width] - [self textLeftForWidth:width]);
+    NSFont *font = self.textLabel.font ?: SPRecorderFont(self.transcriptFontFamily, self.transcriptFontSize);
+    NSRect measured = [self.transcript boundingRectWithSize:NSMakeSize(textWidth, CGFLOAT_MAX)
+                                                   options:NSStringDrawingUsesLineFragmentOrigin |
+                                                           NSStringDrawingUsesFontLeading
+                                                attributes:@{ NSFontAttributeName: font }];
+    CGFloat lineHeight = MAX(1.0, SPRecorderLineHeight(font));
+    NSInteger measuredLines = MAX(1, (NSInteger)ceil(NSHeight(measured) / lineHeight));
+    NSInteger visibleLines = measuredLines;
+    if (self.limitVisibleLines) {
+        visibleLines = MIN(visibleLines, self.maxVisibleLines);
+    } else {
+        visibleLines = MIN(visibleLines, 8);
+    }
+
+    CGFloat textHeight = visibleLines * lineHeight;
+    return ceil(MAX(kExpandedBaseHeight, textHeight + 16.0));
+}
+
 - (void)startElapsedTimerIfNeeded {
     if (self.elapsedTimer) return;
     __weak typeof(self) weakSelf = self;
@@ -343,13 +437,13 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
     if (!self.recordingStartedAt) return;
     NSInteger total = MAX(0, (NSInteger)(-[self.recordingStartedAt timeIntervalSinceNow]));
     self.timeLabel.stringValue = [NSString stringWithFormat:@"%ld:%02ld",
-                                  (long)(total / 60),
-                                  (long)(total % 60)];
+                                  (long)(total / 60), (long)(total % 60)];
 }
 
 - (void)updateTranscript:(NSString *)text {
     _transcript = [text copy] ?: @"";
     self.textLabel.stringValue = _transcript;
+    [self setNeedsLayout:YES];
 }
 
 - (void)showBadge:(NSString *)text {
@@ -362,19 +456,18 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
     if (self.visualState != SPRecorderVisualStateListening) return;
 
     CGFloat clamped = MIN(1.0, MAX(0.0, level));
-    self.smoothedLevel = self.smoothedLevel * 0.58 + clamped * 0.42;
+    self.smoothedLevel = self.smoothedLevel * 0.55 + clamped * 0.45;
     [self.history removeObjectAtIndex:0];
     [self.history addObject:@(self.smoothedLevel)];
 
     [CATransaction begin];
-    [CATransaction setAnimationDuration:0.07];
+    [CATransaction setAnimationDuration:0.075];
     [CATransaction setAnimationTimingFunction:
         [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut]];
     [self setNeedsLayout:YES];
-
     for (NSInteger i = 0; i < self.levelDots.count; i++) {
-        CGFloat threshold = 0.28 + (CGFloat)i * 0.22;
-        self.levelDots[i].opacity = self.smoothedLevel >= threshold ? 0.95 : 0.18;
+        CGFloat threshold = (CGFloat)(i + 1) / (CGFloat)(self.levelDots.count + 1);
+        self.levelDots[i].opacity = self.smoothedLevel >= threshold ? 0.92 : 0.18;
     }
     [CATransaction commit];
 }
@@ -394,14 +487,16 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
             @[@"lingerAndDismiss", @"sp_recorder_lingerAndDismiss"],
             @[@"lingerAndDismissWithDuration:", @"sp_recorder_lingerAndDismissWithDuration:"],
             @[@"dismissToIdle", @"sp_recorder_dismissToIdle"],
+            @[@"reloadAppearanceFromConfig", @"sp_recorder_reloadAppearanceFromConfig"],
+            @[@"showPreviewWithText:fontSize:fontFamily:bottomMargin:limitVisibleLines:maxVisibleLines:",
+              @"sp_recorder_showPreviewWithText:fontSize:fontFamily:bottomMargin:limitVisibleLines:maxVisibleLines:"],
+            @[@"hidePreview", @"sp_recorder_hidePreview"],
         ];
 
         for (NSArray<NSString *> *pair in pairs) {
             Method original = class_getInstanceMethod(self, NSSelectorFromString(pair[0]));
             Method replacement = class_getInstanceMethod(self, NSSelectorFromString(pair[1]));
-            if (original && replacement) {
-                method_exchangeImplementations(original, replacement);
-            }
+            if (original && replacement) method_exchangeImplementations(original, replacement);
         }
     });
 }
@@ -415,6 +510,22 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
     return [value isKindOfClass:NSPanel.class] ? value : nil;
 }
 
+- (id)sp_recorder_valueForKey:(NSString *)key fallback:(id)fallback {
+    @try {
+        id value = [self valueForKey:key];
+        return value ?: fallback;
+    } @catch (__unused NSException *exception) {
+        return fallback;
+    }
+}
+
+- (void)sp_recorder_setValue:(id)value forKeySafely:(NSString *)key {
+    @try {
+        [self setValue:value forKey:key];
+    } @catch (__unused NSException *exception) {
+    }
+}
+
 - (SPRecorderBarView *)sp_recorder_view {
     SPRecorderBarView *view = objc_getAssociatedObject(self, kRecorderViewKey);
     if (view) return view;
@@ -422,15 +533,10 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
     NSPanel *panel = [self sp_recorder_panel];
     if (!panel) return nil;
 
-    // The old overlay hosts an NSVisualEffectView. Keeping it as the content
-    // view leaves a rectangular material layer behind the new capsule. Replace
-    // that host completely with a transparent root so only our rounded layer is
-    // rendered. This is the fix for the visible rectangular frame.
-    NSView *root = [[NSView alloc] initWithFrame:NSMakeRect(0, 0,
-                                                            NSWidth(panel.contentView.bounds),
-                                                            NSHeight(panel.contentView.bounds))];
+    NSView *root = [[NSView alloc] initWithFrame:panel.contentView.bounds];
     root.wantsLayer = YES;
     root.layer.backgroundColor = NSColor.clearColor.CGColor;
+    root.layer.masksToBounds = YES;
     root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 
     panel.backgroundColor = NSColor.clearColor;
@@ -441,27 +547,48 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
     view = [[SPRecorderBarView alloc] initWithFrame:root.bounds];
     view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [root addSubview:view];
-
-    objc_setAssociatedObject(self,
-                             kRecorderViewKey,
-                             view,
-                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, kRecorderViewKey, view, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return view;
 }
 
-- (void)sp_recorder_placeWidth:(CGFloat)width
-                        height:(CGFloat)height
-                      animated:(BOOL)animated {
+- (void)sp_recorder_applyConfiguredAppearance {
+    SPRecorderBarView *view = [self sp_recorder_view];
+    if (!view) return;
+
+    NSNumber *fontSizeValue = [self sp_recorder_valueForKey:@"configuredTextFontSize"
+                                                   fallback:@(kDefaultTextFontSize)];
+    NSString *fontFamily = [self sp_recorder_valueForKey:@"configuredFontFamily" fallback:@"system"];
+    NSNumber *bottomValue = [self sp_recorder_valueForKey:@"configuredBottomMargin"
+                                                  fallback:@(kDefaultBottomMargin)];
+    NSNumber *limitValue = [self sp_recorder_valueForKey:@"configuredLimitVisibleLinesEnabled"
+                                                 fallback:@YES];
+    NSNumber *linesValue = [self sp_recorder_valueForKey:@"configuredMaxVisibleLines"
+                                                 fallback:@(kDefaultMaxVisibleLines)];
+
+    [view applyAppearanceWithFontSize:fontSizeValue.doubleValue
+                           fontFamily:fontFamily
+                         bottomMargin:bottomValue.doubleValue
+                    limitVisibleLines:limitValue.boolValue
+                      maxVisibleLines:linesValue.integerValue];
+}
+
+- (void)sp_recorder_placeWidth:(CGFloat)width height:(CGFloat)height animated:(BOOL)animated {
     NSPanel *panel = [self sp_recorder_panel];
     SPRecorderBarView *view = [self sp_recorder_view];
     NSScreen *screen = NSScreen.mainScreen ?: panel.screen;
     if (!panel || !view || !screen) return;
 
     NSRect visible = screen.visibleFrame;
+    CGFloat bottomMargin = SPRecorderClampBottomMargin(view.bottomMargin);
     NSRect target = NSMakeRect(NSMidX(visible) - width / 2.0,
-                               NSMinY(visible) + kBottomMargin,
+                               NSMinY(visible) + bottomMargin,
                                width,
                                height);
+
+    NSView *root = panel.contentView;
+    root.layer.cornerRadius = floor(height / 2.0);
+    root.layer.masksToBounds = YES;
+    view.frame = NSMakeRect(0, 0, width, height);
 
     if (animated && panel.isVisible) {
         [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
@@ -474,27 +601,26 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
     }
 }
 
+- (void)sp_recorder_placeForCurrentViewAnimated:(BOOL)animated {
+    SPRecorderBarView *view = [self sp_recorder_view];
+    if (!view) return;
+    CGFloat width = view.visualState == SPRecorderVisualStateListening ? kListeningWidth : kExpandedWidth;
+    CGFloat height = [view preferredHeightForWidth:width];
+    [self sp_recorder_placeWidth:width height:height animated:animated];
+}
+
 - (void)sp_recorder_showPanel {
     NSPanel *panel = [self sp_recorder_panel];
     if (!panel) return;
-
-    BOOL wasVisible = panel.isVisible && panel.alphaValue > 0.01;
     [panel orderFrontRegardless];
-    if (!wasVisible) panel.alphaValue = 0.0;
-
-    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
-        context.duration = wasVisible ? 0.07 : 0.12;
-        context.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
-        panel.animator.alphaValue = 1.0;
-    }];
+    panel.alphaValue = 1.0;
 }
 
 - (void)sp_recorder_hidePanel {
     NSPanel *panel = [self sp_recorder_panel];
     if (!panel || !panel.isVisible) return;
-
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
-        context.duration = 0.13;
+        context.duration = 0.12;
         panel.animator.alphaValue = 0.0;
     } completionHandler:^{
         [panel orderOut:nil];
@@ -511,38 +637,26 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
     [NSObject cancelPreviousPerformRequestsWithTarget:self
                                              selector:@selector(sp_recorder_performDismiss)
                                                object:nil];
+    objc_setAssociatedObject(self, kRecorderPreviewKey, @NO, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     if ([state hasPrefix:@"recording"]) {
-        if (!view.elapsedTimer) {
-            view.recordingStartedAt = [NSDate date];
-            [view updateTranscript:@""];
-        }
+        view.recordingStartedAt = [NSDate date];
         [view applyVisualState:SPRecorderVisualStateListening];
-        [self sp_recorder_placeWidth:kListeningWidth
-                              height:kListeningHeight
-                            animated:YES];
+        [self sp_recorder_placeForCurrentViewAnimated:YES];
         [self sp_recorder_showPanel];
     } else if ([state hasPrefix:@"connecting_asr"] ||
                [state hasPrefix:@"finalizing_asr"] ||
                [state isEqualToString:@"correcting"]) {
         [view applyVisualState:SPRecorderVisualStateTranscribing];
-        [self sp_recorder_placeWidth:kExpandedWidth
-                              height:kExpandedHeight
-                            animated:YES];
+        [self sp_recorder_placeForCurrentViewAnimated:YES];
         [self sp_recorder_showPanel];
-    } else if ([state hasPrefix:@"preparing_paste"] ||
-               [state isEqualToString:@"pasting"]) {
+    } else if ([state hasPrefix:@"preparing_paste"] || [state isEqualToString:@"pasting"]) {
         [view applyVisualState:SPRecorderVisualStateComplete];
-        [self sp_recorder_placeWidth:kExpandedWidth
-                              height:kExpandedHeight
-                            animated:YES];
+        [self sp_recorder_placeForCurrentViewAnimated:YES];
         [self sp_recorder_showPanel];
-    } else if ([state isEqualToString:@"error"] ||
-               [state isEqualToString:@"failed"]) {
+    } else if ([state isEqualToString:@"error"] || [state isEqualToString:@"failed"]) {
         [view applyVisualState:SPRecorderVisualStateError];
-        [self sp_recorder_placeWidth:kExpandedWidth
-                              height:kExpandedHeight
-                            animated:YES];
+        [self sp_recorder_placeForCurrentViewAnimated:YES];
         [self sp_recorder_showPanel];
     } else if ([state isEqualToString:@"idle"] ||
                [state isEqualToString:@"completed"] ||
@@ -552,15 +666,64 @@ static void SPSetRoundedPath(CAShapeLayer *layer, CGFloat radius) {
 }
 
 - (void)sp_recorder_updateInterimText:(NSString *)text {
-    [[self sp_recorder_view] updateTranscript:text];
+    SPRecorderBarView *view = [self sp_recorder_view];
+    [view updateTranscript:text];
+    if (view.visualState != SPRecorderVisualStateListening) {
+        [self sp_recorder_placeForCurrentViewAnimated:YES];
+    }
 }
 
 - (void)sp_recorder_updateDisplayText:(NSString *)text {
-    [[self sp_recorder_view] updateTranscript:text];
+    SPRecorderBarView *view = [self sp_recorder_view];
+    [view updateTranscript:text];
+    if (view.visualState != SPRecorderVisualStateListening) {
+        [self sp_recorder_placeForCurrentViewAnimated:YES];
+    }
 }
 
 - (void)sp_recorder_showResultBadge:(NSString *)badgeText {
     [[self sp_recorder_view] showBadge:badgeText];
+}
+
+- (void)sp_recorder_reloadAppearanceFromConfig {
+    [self sp_recorder_reloadAppearanceFromConfig];
+    [self sp_recorder_applyConfiguredAppearance];
+
+    if ([self sp_recorder_panel].isVisible &&
+        ![objc_getAssociatedObject(self, kRecorderPreviewKey) boolValue]) {
+        [self sp_recorder_placeForCurrentViewAnimated:NO];
+    }
+}
+
+- (void)sp_recorder_showPreviewWithText:(NSString *)text
+                               fontSize:(CGFloat)fontSize
+                             fontFamily:(NSString *)fontFamily
+                           bottomMargin:(CGFloat)bottomMargin
+                      limitVisibleLines:(BOOL)limitVisibleLines
+                        maxVisibleLines:(NSInteger)maxVisibleLines {
+    NSString *state = [self sp_recorder_valueForKey:@"currentState" fallback:@"idle"];
+    if (![state isEqualToString:@"idle"] && ![state isEqualToString:@"completed"]) return;
+
+    [self sp_recorder_setValue:@YES forKeySafely:@"previewActive"];
+    objc_setAssociatedObject(self, kRecorderPreviewKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    SPRecorderBarView *view = [self sp_recorder_view];
+    [view applyAppearanceWithFontSize:fontSize
+                           fontFamily:fontFamily
+                         bottomMargin:bottomMargin
+                    limitVisibleLines:limitVisibleLines
+                      maxVisibleLines:maxVisibleLines];
+    [view updateTranscript:text ?: @""];
+    [view applyVisualState:SPRecorderVisualStateComplete];
+    [self sp_recorder_placeForCurrentViewAnimated:NO];
+    [self sp_recorder_showPanel];
+}
+
+- (void)sp_recorder_hidePreview {
+    objc_setAssociatedObject(self, kRecorderPreviewKey, @NO, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [self sp_recorder_setValue:@NO forKeySafely:@"previewActive"];
+    [self sp_recorder_applyConfiguredAppearance];
+    [self sp_recorder_hidePanel];
 }
 
 - (void)sp_recorder_lingerAndDismiss {
