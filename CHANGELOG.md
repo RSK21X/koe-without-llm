@@ -2,6 +2,12 @@
 
 All notable user-facing changes to Koe are documented here.
 
+## 1.0.34 - 2026-09-16
+
+### Changed
+
+- Refined the recorder overlay into a compact, frameless pill with a centered layout and live audio level display.
+
 ## 1.0.33 - 2026-09-07
 
 ### Changed
